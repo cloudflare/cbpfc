@@ -41,7 +41,7 @@ import (
 const funcTemplate = `
 // True if packet matches, false otherwise
 static inline
-bool {{.Name}}(uint8_t *data, uint8_t *data_end) {
+bool {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
 	__attribute__((unused))
     uint32_t a, x, m[16];
 {{range $i, $b := .Blocks}}
