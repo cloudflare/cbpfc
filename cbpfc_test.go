@@ -9,7 +9,7 @@ import (
 
 // Make sure we bail out with 0 instructions
 func TestZero(t *testing.T) {
-	_, err := Compile([]bpf.Instruction{}, "test")
+	_, err := compile([]bpf.Instruction{})
 
 	if err == nil {
 		t.Fatal("zero length instructions compiled", err)
@@ -18,7 +18,7 @@ func TestZero(t *testing.T) {
 
 // Make sure we can compile every possible instruction
 func TestAll(t *testing.T) {
-	_, err := Compile([]bpf.Instruction{
+	_, err := ToC([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA},
 		bpf.LoadConstant{Dst: bpf.RegX},
 
@@ -98,10 +98,10 @@ func TestAll(t *testing.T) {
 
 // Test out of bound jumps
 func TestJump(t *testing.T) {
-	_, err := Compile([]bpf.Instruction{
+	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegX, Val: 0},
 		bpf.Jump{Skip: 0},
-	}, "test")
+	})
 
 	if err == nil {
 		t.Fatal("out of bounds skip compiled")
@@ -109,10 +109,10 @@ func TestJump(t *testing.T) {
 }
 
 func TestJumpIf(t *testing.T) {
-	_, err := Compile([]bpf.Instruction{
+	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 2, SkipTrue: 0, SkipFalse: 1},
-	}, "test")
+	})
 
 	if err == nil {
 		t.Fatal("out of bounds skip compiled")
@@ -120,11 +120,11 @@ func TestJumpIf(t *testing.T) {
 }
 
 func TestJumpIfX(t *testing.T) {
-	_, err := Compile([]bpf.Instruction{
+	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 		bpf.LoadConstant{Dst: bpf.RegX, Val: 3},
 		bpf.JumpIfX{Cond: bpf.JumpEqual, SkipTrue: 1, SkipFalse: 0},
-	}, "test")
+	})
 
 	if err == nil {
 		t.Fatal("out of bounds skip compiled")
@@ -133,9 +133,9 @@ func TestJumpIfX(t *testing.T) {
 
 // Out of bounds fall through - last block doesn't end in return
 func TestFallthrough(t *testing.T) {
-	_, err := Compile([]bpf.Instruction{
+	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
-	}, "test")
+	})
 
 	if err == nil {
 		t.Fatal("out of bounds fall through compiled")

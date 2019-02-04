@@ -11,8 +11,10 @@
 // can be the target of a jump.
 //
 // A block also knows what blocks it jumps to. This forms a DAG of blocks.
-// Storing an ordered list of the blocks allows us to mimick the layout
-// of the original code as closely as possible (which is great for debugging!)
+//
+// The blocks are preserved in the order they are found as this guarantees that
+// a block only targets later blocks (cBPF jumps are positive, relative offsets).
+// This also mimics the layout of the original cBPF, which is good for debugging.
 //
 // Every instruction is converted to a single statement.
 // Every packet load must be preceeded by a "guard" checking the bounds
@@ -31,63 +33,10 @@ package cbpfc
 import (
 	"fmt"
 	"sort"
-	"strings"
-	"text/template"
 
 	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
-
-const funcTemplate = `
-// True if packet matches, false otherwise
-static inline
-bool {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
-	__attribute__((unused))
-    uint32_t a, x, m[16];
-{{range $i, $b := .Blocks}}
-{{if $b.HasLabel}}{{$b.Label}}:{{end}}
-{{- range $i, $s := $b.Statements}}
-	{{$s}}
-{{- end}}
-{{end}}
-}`
-
-type function struct {
-	Name   string
-	Blocks []compiledBlock
-}
-
-// cBPF reg to C symbol
-var regToSym = map[bpf.Register]string{
-	bpf.RegA: "a",
-	bpf.RegX: "x",
-}
-
-// alu operation to C operator
-var aluToOp = map[bpf.ALUOp]string{
-	bpf.ALUOpAdd:        "+",
-	bpf.ALUOpSub:        "-",
-	bpf.ALUOpMul:        "*",
-	bpf.ALUOpDiv:        "/",
-	bpf.ALUOpOr:         "|",
-	bpf.ALUOpAnd:        "&",
-	bpf.ALUOpShiftLeft:  "<<",
-	bpf.ALUOpShiftRight: ">>",
-	bpf.ALUOpMod:        "%",
-	bpf.ALUOpXor:        "^",
-}
-
-// jump test to fmt string for condition
-var condToFmt = map[bpf.JumpTest]string{
-	bpf.JumpEqual:          "a == %v",
-	bpf.JumpNotEqual:       "a != %v",
-	bpf.JumpGreaterThan:    "a > %v",
-	bpf.JumpLessThan:       "a < %v",
-	bpf.JumpGreaterOrEqual: "a >= %v",
-	bpf.JumpLessOrEqual:    "a <= %v",
-	bpf.JumpBitsSet:        "a & %v",
-	bpf.JumpBitsNotSet:     "!(a & %v)",
-}
 
 // Absolute position of a cBPF instruction
 type pos uint
@@ -111,9 +60,6 @@ func (i instruction) String() string {
 type block struct {
 	insns []instruction
 
-	// True if a label has been created
-	HasLabel bool
-
 	// Map of absolute instruction positions the last instruction
 	// of this block can jump to, to the corresponding block
 	jumps map[pos]*block
@@ -121,6 +67,10 @@ type block struct {
 	// id of the instruction that started this block
 	// Unique, but not guaranteed to match insns[0].id after blocks are modified
 	id pos
+
+	// True IFF another block jumps to this block as a target
+	// A block falling-through to this one does not count
+	IsTarget bool
 }
 
 // newBlock creates a block with copy of insns
@@ -140,19 +90,13 @@ func (b *block) Label() string {
 	return fmt.Sprintf("block_%d", b.id)
 }
 
-// Create a unique label for this block
-func (b *block) createLabel() string {
-	b.HasLabel = true
-	return b.Label()
-}
-
 func (b *block) skipToPos(s skip) pos {
 	return b.last().id + 1 + pos(s)
 }
 
-// Get the target label of a skip
-func (b *block) createSkipLabel(s skip) string {
-	return b.jumps[b.skipToPos(s)].createLabel()
+// Get the target block of a skip
+func (b *block) skipToBlock(s skip) *block {
+	return b.jumps[b.skipToPos(s)]
 }
 
 func (b *block) insert(pos uint, insn instruction) {
@@ -161,12 +105,6 @@ func (b *block) insert(pos uint, insn instruction) {
 
 func (b *block) last() instruction {
 	return b.insns[len(b.insns)-1]
-}
-
-type compiledBlock struct {
-	*block
-
-	Statements []string
 }
 
 // packetGuardAbsolute is a "fake" instruction
@@ -193,13 +131,13 @@ func (p packetGuardIndirect) Assemble() (bpf.RawInstruction, error) {
 	return bpf.RawInstruction{}, errors.Errorf("unsupported")
 }
 
-// Compile compiles a cBPF program to a C function, named "funcName",
-// with a signature of: bool funcName(uint8_t *data, uint8_t *data_end).
-// The function returns true IFF the packet in "data" matches the cBPF program.
-func Compile(insns []bpf.Instruction, funcName string) (string, error) {
+// compile compiles a cBPF program to an ordered slice of blocks, with:
+// - Required packet access guards added
+// - JumpIf and JumpIfX instructions normalized (see normalizeJumps)
+func compile(insns []bpf.Instruction) ([]*block, error) {
 	// Can't do anything meaningful with no instructions
 	if len(insns) == 0 {
-		return "", errors.New("can't campile 0 instructions")
+		return nil, errors.New("can't campile 0 instructions")
 	}
 
 	instructions := toInstructions(insns)
@@ -207,38 +145,13 @@ func Compile(insns []bpf.Instruction, funcName string) (string, error) {
 	// Split into blocks
 	blocks, err := splitBlocks(instructions)
 	if err != nil {
-		return "", errors.Wrapf(err, "unable to compute blocks")
+		return nil, errors.Wrapf(err, "unable to compute blocks")
 	}
 
 	// Guard packet loads
 	addPacketGuards(blocks)
 
-	fun := function{
-		Name:   funcName,
-		Blocks: make([]compiledBlock, len(blocks)),
-	}
-
-	// Compile blocks to C
-	for i, block := range blocks {
-		fun.Blocks[i], err = compileBlock(block)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	// Fill in the template
-	tmpl, err := template.New("cbfp_func").Parse(funcTemplate)
-	if err != nil {
-		return "", errors.Wrapf(err, "unable to parse func template")
-	}
-
-	c := strings.Builder{}
-
-	if err := tmpl.Execute(&c, fun); err != nil {
-		return "", errors.Wrapf(err, "unable to execute func template")
-	}
-
-	return c.String(), nil
+	return blocks, nil
 }
 
 func toInstructions(insns []bpf.Instruction) []instruction {
@@ -285,6 +198,14 @@ func visitBlock(insns []instruction, target pos) (*block, []skip) {
 	return newBlock(insns), []skip{0}
 }
 
+// targetBlock is a block that targets (ie jumps) to another block
+// used internally by splitBlocks()
+type targetBlock struct {
+	*block
+	// True IFF the block falls through to the other block (skip == 0)
+	isFallthrough bool
+}
+
 // Returns blocks in order they appear in original code
 func splitBlocks(instructions []instruction) ([]*block, error) {
 	// Blocks we've visited already
@@ -292,7 +213,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 
 	// map of targets to blocks that target them
 	// target 0 is for the base case
-	targets := map[pos][]*block{
+	targets := map[pos][]targetBlock{
 		0: nil,
 	}
 
@@ -320,7 +241,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 				return nil, errors.Errorf("instruction %v flows past last instruction", next.last())
 			}
 
-			targets[t] = append(targets[t], next)
+			targets[t] = append(targets[t], targetBlock{next, s == 0})
 		}
 
 		jmpBlocks := targets[target]
@@ -328,6 +249,11 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 		// Mark all the blocks that jump to the block we've just visited as doing so
 		for _, jmpBlock := range jmpBlocks {
 			jmpBlock.jumps[target] = next
+
+			// Not a fallthrough, the block we've just visited is explicitly jumped to
+			if !jmpBlock.isFallthrough {
+				next.IsTarget = true
+			}
 		}
 
 		blocks = append(blocks, next)
@@ -340,7 +266,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 }
 
 // sortTargets sorts the target positions (keys), lowest first
-func sortTargets(targets map[pos][]*block) []pos {
+func sortTargets(targets map[pos][]targetBlock) []pos {
 	keys := make([]pos, len(targets))
 
 	i := 0
@@ -475,112 +401,4 @@ func addIndirectPacketGuard(block *block, guard packetGuardIndirect) packetGuard
 	}
 
 	return guard
-}
-
-// compileBlock compiles a block to C.
-func compileBlock(blk *block) (compiledBlock, error) {
-	cBlk := compiledBlock{
-		block:      blk,
-		Statements: make([]string, len(blk.insns)),
-	}
-
-	for i, insn := range blk.insns {
-		stat, err := compileInsn(insn, blk)
-		if err != nil {
-			return cBlk, errors.Wrapf(err, "unable to compile %v", insn)
-		}
-
-		cBlk.Statements[i] = stat
-	}
-
-	return cBlk, nil
-}
-
-// compileInsn compiles an instruction to a single C line / statement.
-func compileInsn(insn instruction, blk *block) (string, error) {
-	switch i := insn.Instruction.(type) {
-
-	case bpf.LoadConstant:
-		return stat("%s = %d;", regToSym[i.Dst], i.Val)
-	case bpf.LoadScratch:
-		return stat("%s = m[%d];", regToSym[i.Dst], i.N)
-	case bpf.LoadAbsolute:
-		return packetLoad(i.Size, "data + %d", i.Off)
-	case bpf.LoadIndirect:
-		return packetLoad(i.Size, "data + x + %d", i.Off)
-	case bpf.LoadMemShift:
-		return stat("x = 4*(*(data + %d) & 0xf);", i.Off)
-
-	case bpf.StoreScratch:
-		return stat("m[%d] = %s;", i.N, regToSym[i.Src])
-
-	case bpf.ALUOpConstant:
-		return stat("a %s= %d;", aluToOp[i.Op], i.Val)
-	case bpf.ALUOpX:
-		return stat("a %s= x;", aluToOp[i.Op])
-	case bpf.NegateA:
-		return stat("a = -a;")
-
-	case bpf.Jump:
-		return stat("goto %s;", blk.createSkipLabel(skip(i.Skip)))
-	case bpf.JumpIf:
-		return conditionalJump(skip(i.SkipTrue), skip(i.SkipFalse), blk, condToFmt[i.Cond], i.Val)
-	case bpf.JumpIfX:
-		return conditionalJump(skip(i.SkipTrue), skip(i.SkipFalse), blk, condToFmt[i.Cond], "x")
-
-	// From man iptables-extensions, non-zero is match (which they call "pass" in their example because the iptables
-	// action is "ACCEPT", but gatesetter uses iptable rules with "DROP")
-	case bpf.RetA:
-		return stat("return a != 0;")
-	case bpf.RetConstant:
-		if i.Val == 0 {
-			return stat("return false;")
-		} else {
-			return stat("return true;")
-		}
-
-	case bpf.TXA:
-		return stat("a = x;")
-	case bpf.TAX:
-		return stat("x = a;")
-
-	case packetGuardAbsolute:
-		return stat("if (data + %d > data_end) return false;", i.Len)
-	case packetGuardIndirect:
-		return stat("if (data + x + %d > data_end) return false;", i.Len)
-
-	default:
-		return "", errors.Errorf("unsupported instruction %v", insn)
-	}
-}
-
-func packetLoad(size int, offsetFmt string, offsetArgs ...interface{}) (string, error) {
-	offset := fmt.Sprintf(offsetFmt, offsetArgs...)
-
-	switch size {
-	case 1:
-		return stat("a = *(%s);", offset)
-	case 2:
-		return stat("a = ntohs(*((uint16_t *) (%s)));", offset)
-	case 4:
-		return stat("a = ntohl(*((uint32_t *) (%s)));", offset)
-	}
-
-	return "", errors.Errorf("unsupported load size %d", size)
-}
-
-func conditionalJump(skipTrue, skipFalse skip, blk *block, condFmt string, condArgs ...interface{}) (string, error) {
-	cond := fmt.Sprintf(condFmt, condArgs...)
-
-	if skipTrue > 0 {
-		if skipFalse > 0 {
-			return stat("if (%s) goto %s; else goto %s;", cond, blk.createSkipLabel(skipTrue), blk.createSkipLabel(skipFalse))
-		}
-		return stat("if (%s) goto %s;", cond, blk.createSkipLabel(skipTrue))
-	}
-	return stat("if (!(%s)) goto %s;", cond, blk.createSkipLabel(skipFalse))
-}
-
-func stat(format string, a ...interface{}) (string, error) {
-	return fmt.Sprintf(format, a...), nil
 }
