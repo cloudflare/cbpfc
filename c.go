@@ -208,13 +208,11 @@ func packetLoadToC(size int, offsetFmt string, offsetArgs ...interface{}) (strin
 func condToC(skipTrue, skipFalse skip, blk *block, condFmt string, condArgs ...interface{}) (string, error) {
 	cond := fmt.Sprintf(condFmt, condArgs...)
 
-	if skipTrue > 0 {
-		if skipFalse > 0 {
-			return stat("if (%s) goto %s; else goto %s;", cond, blk.skipToBlock(skipTrue).Label(), blk.skipToBlock(skipFalse).Label())
-		}
+	if skipFalse == 0 {
 		return stat("if (%s) goto %s;", cond, blk.skipToBlock(skipTrue).Label())
 	}
-	return stat("if (!(%s)) goto %s;", cond, blk.skipToBlock(skipFalse).Label())
+
+	return stat("if (%s) goto %s; else goto %s;", cond, blk.skipToBlock(skipTrue).Label(), blk.skipToBlock(skipFalse).Label())
 }
 
 func stat(format string, a ...interface{}) (string, error) {

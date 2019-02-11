@@ -142,6 +142,83 @@ func TestFallthrough(t *testing.T) {
 	}
 }
 
+// Jump normalization
+func TestNormalizeJumps(t *testing.T) {
+	insns := func(skipTrue, skipFalse uint8) []instruction {
+		return toInstructions([]bpf.Instruction{
+			bpf.JumpIf{Cond: bpf.JumpEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpNotEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpGreaterThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpGreaterThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpLessThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpLessThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpGreaterOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpGreaterOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpLessOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpLessOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpBitsSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpBitsSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpBitsNotSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpBitsNotSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+		})
+	}
+
+	// same insns, but with the conditions inverted
+	invertedInsns := func(skipTrue, skipFalse uint8) []instruction {
+		return toInstructions([]bpf.Instruction{
+			bpf.JumpIf{Cond: bpf.JumpNotEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpNotEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpLessOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpLessOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpGreaterOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpGreaterOrEqual, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpLessThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpLessThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpGreaterThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpGreaterThan, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpBitsNotSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpBitsNotSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+
+			bpf.JumpIf{Cond: bpf.JumpBitsSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+			bpf.JumpIfX{Cond: bpf.JumpBitsSet, SkipTrue: skipTrue, SkipFalse: skipFalse},
+		})
+	}
+
+	check := func(t *testing.T, input []instruction, expected []instruction) {
+		normalizeJumps(input)
+
+		if !reflect.DeepEqual(input, expected) {
+			t.Fatalf("\nGot:\n%v\n\nExpected:\n%v", input, expected)
+		}
+	}
+
+	// skipTrue only - no change
+	check(t, insns(1, 0), insns(1, 0))
+
+	// skipFalse & skipTrue - no change
+	check(t, insns(1, 3), insns(1, 3))
+
+	// skipFalse only - inverted
+	check(t, insns(0, 3), invertedInsns(3, 0))
+}
+
 // scratch reg initialized and used in one block
 func TestInitializedScratch(t *testing.T) {
 	blocks := mustSplitBlocks(t, 1, toInstructions([]bpf.Instruction{

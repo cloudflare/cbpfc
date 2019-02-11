@@ -38,6 +38,18 @@ import (
 	"golang.org/x/net/bpf"
 )
 
+// Map conditionals to their inverse
+var condToInverse = map[bpf.JumpTest]bpf.JumpTest{
+	bpf.JumpEqual:          bpf.JumpNotEqual,
+	bpf.JumpNotEqual:       bpf.JumpEqual,
+	bpf.JumpGreaterThan:    bpf.JumpLessOrEqual,
+	bpf.JumpLessThan:       bpf.JumpGreaterOrEqual,
+	bpf.JumpGreaterOrEqual: bpf.JumpLessThan,
+	bpf.JumpLessOrEqual:    bpf.JumpGreaterThan,
+	bpf.JumpBitsSet:        bpf.JumpBitsNotSet,
+	bpf.JumpBitsNotSet:     bpf.JumpBitsSet,
+}
+
 // Absolute position of a cBPF instruction
 type pos uint
 
@@ -143,6 +155,8 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 
 	instructions := toInstructions(insns)
 
+	normalizeJumps(instructions)
+
 	// Split into blocks
 	blocks, err := splitBlocks(instructions)
 	if err != nil {
@@ -172,6 +186,35 @@ func toInstructions(insns []bpf.Instruction) []instruction {
 	}
 
 	return instructions
+}
+
+// normalizeJumps normalizes conditional jumps to always use skipTrue:
+// Jumps that only use skipTrue (skipFalse == 0) are unchanged.
+// Jumps that use both skipTrue and skipFalse are unchanged.
+// Jumps that only use skipFalse (skipTrue == 0) are inverted to only use skipTrue.
+func normalizeJumps(insns []instruction) {
+	for pc := range insns {
+		switch i := insns[pc].Instruction.(type) {
+		case bpf.JumpIf:
+			if !shouldInvert(i.SkipTrue, i.SkipFalse) {
+				continue
+			}
+
+			insns[pc].Instruction = bpf.JumpIf{Cond: condToInverse[i.Cond], Val: i.Val, SkipTrue: i.SkipFalse, SkipFalse: i.SkipTrue}
+
+		case bpf.JumpIfX:
+			if !shouldInvert(i.SkipTrue, i.SkipFalse) {
+				continue
+			}
+
+			insns[pc].Instruction = bpf.JumpIfX{Cond: condToInverse[i.Cond], SkipTrue: i.SkipFalse, SkipFalse: i.SkipTrue}
+		}
+	}
+}
+
+// Check if a conditional jump should be inverted
+func shouldInvert(skipTrue, skipFalse uint8) bool {
+	return skipTrue == 0 && skipFalse != 0
 }
 
 // Traverse instructions until end of first block. Target is absolute start of block.
