@@ -16,88 +16,8 @@ func TestZero(t *testing.T) {
 	}
 }
 
-// Make sure we can compile every possible instruction
-func TestAll(t *testing.T) {
-	_, err := ToC([]bpf.Instruction{
-		bpf.LoadConstant{Dst: bpf.RegA},
-		bpf.LoadConstant{Dst: bpf.RegX},
-
-		bpf.LoadAbsolute{Size: 1},
-		bpf.LoadAbsolute{Size: 2},
-		bpf.LoadAbsolute{Size: 4},
-
-		bpf.LoadIndirect{Size: 1},
-		bpf.LoadIndirect{Size: 2},
-		bpf.LoadIndirect{Size: 4},
-
-		bpf.LoadMemShift{},
-
-		bpf.StoreScratch{Src: bpf.RegA},
-		bpf.StoreScratch{Src: bpf.RegX},
-
-		bpf.LoadScratch{Dst: bpf.RegA},
-		bpf.LoadScratch{Dst: bpf.RegX},
-
-		bpf.ALUOpConstant{Op: bpf.ALUOpAdd},
-		bpf.ALUOpConstant{Op: bpf.ALUOpSub},
-		bpf.ALUOpConstant{Op: bpf.ALUOpMul},
-		bpf.ALUOpConstant{Op: bpf.ALUOpDiv},
-		bpf.ALUOpConstant{Op: bpf.ALUOpOr},
-		bpf.ALUOpConstant{Op: bpf.ALUOpAnd},
-		bpf.ALUOpConstant{Op: bpf.ALUOpShiftLeft},
-		bpf.ALUOpConstant{Op: bpf.ALUOpShiftRight},
-		bpf.ALUOpConstant{Op: bpf.ALUOpMod},
-		bpf.ALUOpConstant{Op: bpf.ALUOpXor},
-
-		bpf.ALUOpX{Op: bpf.ALUOpAdd},
-		bpf.ALUOpX{Op: bpf.ALUOpSub},
-		bpf.ALUOpX{Op: bpf.ALUOpMul},
-		bpf.ALUOpX{Op: bpf.ALUOpDiv},
-		bpf.ALUOpX{Op: bpf.ALUOpOr},
-		bpf.ALUOpX{Op: bpf.ALUOpAnd},
-		bpf.ALUOpX{Op: bpf.ALUOpShiftLeft},
-		bpf.ALUOpX{Op: bpf.ALUOpShiftRight},
-		bpf.ALUOpX{Op: bpf.ALUOpMod},
-		bpf.ALUOpX{Op: bpf.ALUOpXor},
-
-		bpf.NegateA{},
-
-		bpf.Jump{},
-
-		bpf.JumpIf{Cond: bpf.JumpEqual},
-		bpf.JumpIf{Cond: bpf.JumpNotEqual},
-		bpf.JumpIf{Cond: bpf.JumpGreaterThan},
-		bpf.JumpIf{Cond: bpf.JumpLessThan},
-		bpf.JumpIf{Cond: bpf.JumpGreaterOrEqual},
-		bpf.JumpIf{Cond: bpf.JumpLessOrEqual},
-		bpf.JumpIf{Cond: bpf.JumpBitsSet},
-		bpf.JumpIf{Cond: bpf.JumpBitsNotSet},
-
-		bpf.JumpIfX{Cond: bpf.JumpEqual},
-		bpf.JumpIfX{Cond: bpf.JumpNotEqual},
-		bpf.JumpIfX{Cond: bpf.JumpGreaterThan},
-		bpf.JumpIfX{Cond: bpf.JumpLessThan},
-		bpf.JumpIfX{Cond: bpf.JumpGreaterOrEqual},
-		bpf.JumpIfX{Cond: bpf.JumpLessOrEqual},
-		bpf.JumpIfX{Cond: bpf.JumpBitsSet},
-		bpf.JumpIfX{Cond: bpf.JumpBitsNotSet},
-
-		bpf.RetA{},
-
-		bpf.RetConstant{},
-
-		bpf.TXA{},
-
-		bpf.TAX{},
-	}, "test")
-
-	if err != nil {
-		t.Fatal("all instructions failed to compile", err)
-	}
-}
-
 // Test out of bound jumps
-func TestJump(t *testing.T) {
+func TestJumpOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegX, Val: 0},
 		bpf.Jump{Skip: 0},
@@ -108,7 +28,7 @@ func TestJump(t *testing.T) {
 	}
 }
 
-func TestJumpIf(t *testing.T) {
+func TestJumpIfOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 2, SkipTrue: 0, SkipFalse: 1},
@@ -119,7 +39,7 @@ func TestJumpIf(t *testing.T) {
 	}
 }
 
-func TestJumpIfX(t *testing.T) {
+func TestJumpIfXOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 		bpf.LoadConstant{Dst: bpf.RegX, Val: 3},
@@ -132,7 +52,7 @@ func TestJumpIfX(t *testing.T) {
 }
 
 // Out of bounds fall through - last block doesn't end in return
-func TestFallthrough(t *testing.T) {
+func TestFallthroughOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 	})
