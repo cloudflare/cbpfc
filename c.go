@@ -14,7 +14,14 @@ const funcTemplate = `
 static inline
 bool {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
 	__attribute__((unused))
-    uint32_t a, x, m[16];
+	uint32_t m[16];
+
+	__attribute__((unused))
+	uint32_t a = 0;
+
+	__attribute__((unused))
+	uint32_t x = 0;
+
 {{range $i, $b := .Blocks}}
 {{if $b.IsTarget}}{{$b.Label}}:{{end}}
 {{- range $i, $s := $b.Statements}}

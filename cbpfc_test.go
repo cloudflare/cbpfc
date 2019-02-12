@@ -22,9 +22,6 @@ func TestAll(t *testing.T) {
 		bpf.LoadConstant{Dst: bpf.RegA},
 		bpf.LoadConstant{Dst: bpf.RegX},
 
-		bpf.LoadScratch{Dst: bpf.RegA},
-		bpf.LoadScratch{Dst: bpf.RegX},
-
 		bpf.LoadAbsolute{Size: 1},
 		bpf.LoadAbsolute{Size: 2},
 		bpf.LoadAbsolute{Size: 4},
@@ -37,6 +34,9 @@ func TestAll(t *testing.T) {
 
 		bpf.StoreScratch{Src: bpf.RegA},
 		bpf.StoreScratch{Src: bpf.RegX},
+
+		bpf.LoadScratch{Dst: bpf.RegA},
+		bpf.LoadScratch{Dst: bpf.RegX},
 
 		bpf.ALUOpConstant{Op: bpf.ALUOpAdd},
 		bpf.ALUOpConstant{Op: bpf.ALUOpSub},
@@ -142,6 +142,83 @@ func TestFallthrough(t *testing.T) {
 	}
 }
 
+// scratch reg initialized and used in one block
+func TestInitializedScratch(t *testing.T) {
+	blocks := mustSplitBlocks(t, 1, toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.StoreScratch{Src: bpf.RegA, N: 2}, // initialize m[2]
+		/* 1 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
+		/* 2 */ bpf.RetA{},
+	}))
+
+	err := checkUninitializedScratch(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// scratch reg initialized in both branches
+func TestPartiallyInitializedScratch(t *testing.T) {
+	blocks := mustSplitBlocks(t, 4, toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadConstant{Dst: bpf.RegA, Val: 3},
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
+
+		// block 1
+		/* 2 */ bpf.StoreScratch{Src: bpf.RegA, N: 2}, // initialize m[2]
+		/* 3 */ bpf.Jump{Skip: 1}, // jump to block 3
+
+		// block 2
+		/* 4 */ bpf.StoreScratch{Src: bpf.RegX, N: 2}, // initialize m[2]
+		// fall through to block 3
+
+		// block 3
+		/* 5 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
+		/* 6 */ bpf.RetA{},
+	}))
+
+	err := checkUninitializedScratch(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// scratch reg uninitialized and used in one block
+func TestUninitializedScratch(t *testing.T) {
+	blocks := mustSplitBlocks(t, 1, toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
+		/* 1 */ bpf.RetA{},
+	}))
+
+	err := checkUninitializedScratch(blocks)
+	if err == nil {
+		t.Fatal("uninitialized scratch accepted")
+	}
+}
+
+// scratch reg initialized in one branch, but not the other
+func TestPartiallyUninitializedScratch(t *testing.T) {
+	blocks := mustSplitBlocks(t, 3, toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadConstant{Dst: bpf.RegA, Val: 3},
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 1 or 2
+
+		// block 1
+		/* 2 */ bpf.StoreScratch{Src: bpf.RegA, N: 2}, // initialize m[2]
+		// fall through to block 2
+
+		// block 2
+		/* 3 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
+		/* 4 */ bpf.RetA{},
+	}))
+
+	err := checkUninitializedScratch(blocks)
+	if err == nil {
+		t.Fatal("uninitialized scratch accepted")
+	}
+}
+
 // Test block splitting
 func TestBlocksJump(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
@@ -151,14 +228,7 @@ func TestBlocksJump(t *testing.T) {
 		/* 3 */ bpf.RetConstant{Val: 1},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 2 {
-		t.Fatalf("expected 2 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 2, insns)
 
 	// Unreachable code will never make it into a block
 	matchBlock(t, blocks[0], insns[:2], map[pos]*block{3: blocks[1]})
@@ -173,14 +243,7 @@ func TestBlocksJumpIf(t *testing.T) {
 		/* 3 */ bpf.RetConstant{Val: 1},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 3 {
-		t.Fatalf("expected 3 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 3, insns)
 
 	matchBlock(t, blocks[0], insns[0:2], map[pos]*block{2: blocks[1], 3: blocks[2]})
 	matchBlock(t, blocks[1], insns[2:3], map[pos]*block{})
@@ -196,14 +259,7 @@ func TestBlocksJumpIfX(t *testing.T) {
 		/* 4 */ bpf.RetConstant{Val: 1},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 3 {
-		t.Fatalf("expected 3 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 3, insns)
 
 	matchBlock(t, blocks[0], insns[0:3], map[pos]*block{3: blocks[1], 4: blocks[2]})
 	matchBlock(t, blocks[1], insns[3:4], map[pos]*block{})
@@ -218,14 +274,7 @@ func TestAbsoluteGuardSize(t *testing.T) {
 		bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 1 {
-		t.Fatalf("expected 1 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 1, insns)
 
 	addPacketGuards(blocks)
 
@@ -252,14 +301,7 @@ func TestAbsoluteGuardParentsOK(t *testing.T) {
 		/* 6 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -289,14 +331,7 @@ func TestAbsoluteGuardParentsNOK(t *testing.T) {
 		/* 6 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -313,14 +348,7 @@ func TestIndirectGuardSize(t *testing.T) {
 		bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 1 {
-		t.Fatalf("expected 1 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 1, insns)
 
 	addPacketGuards(blocks)
 
@@ -347,14 +375,7 @@ func TestIndirectGuardParentsOK(t *testing.T) {
 		/* 6 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -384,14 +405,7 @@ func TestIndirectGuardParentsNOK(t *testing.T) {
 		/* 6 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -422,14 +436,7 @@ func TestIndirectGuardClobberConstant(t *testing.T) {
 		/* 7 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -460,14 +467,7 @@ func TestIndirectGuardClobberScratch(t *testing.T) {
 		/* 7 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -498,14 +498,7 @@ func TestIndirectGuardClobberMemShift(t *testing.T) {
 		/* 7 */ bpf.RetConstant{},
 	})
 
-	blocks, err := splitBlocks(insns)
-	if err != nil {
-		t.Fatal("splitBlocks failed", err)
-	}
-
-	if len(blocks) != 4 {
-		t.Fatalf("expected 4 blocks got %d", len(blocks))
-	}
+	blocks := mustSplitBlocks(t, 4, insns)
 
 	addPacketGuards(blocks)
 
@@ -526,4 +519,17 @@ func matchBlock(t *testing.T, b *block, expected []instruction, jumps map[pos]*b
 	if !reflect.DeepEqual(jumps, b.jumps) {
 		t.Fatalf("expected jumps %v, got %v", jumps, b.jumps)
 	}
+}
+
+func mustSplitBlocks(t *testing.T, blockCount int, insns []instruction) []*block {
+	blocks, err := splitBlocks(insns)
+	if err != nil {
+		t.Fatal("splitBlocks failed:", err)
+	}
+
+	if len(blocks) != blockCount {
+		t.Fatalf("expected %d blocks got %d", blockCount, len(blocks))
+	}
+
+	return blocks
 }

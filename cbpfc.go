@@ -132,6 +132,7 @@ func (p packetGuardIndirect) Assemble() (bpf.RawInstruction, error) {
 }
 
 // compile compiles a cBPF program to an ordered slice of blocks, with:
+// - Reads from uninitialized scratch m[] rejected
 // - Required packet access guards added
 // - JumpIf and JumpIfX instructions normalized (see normalizeJumps)
 func compile(insns []bpf.Instruction) ([]*block, error) {
@@ -146,6 +147,12 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 	blocks, err := splitBlocks(instructions)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to compute blocks")
+	}
+
+	// Check uninitialized scratch usage
+	err = checkUninitializedScratch(blocks)
+	if err != nil {
+		return nil, err
 	}
 
 	// Guard packet loads
@@ -401,4 +408,72 @@ func addIndirectPacketGuard(block *block, guard packetGuardIndirect) packetGuard
 	}
 
 	return guard
+}
+
+// Status of scratch slots (0-15)
+// true: initialized, false uninitialized
+type scratchStatus [16]bool
+
+// merge merges two scratch statuses into one
+func (a scratchStatus) merge(b scratchStatus) scratchStatus {
+	newScratch := scratchStatus{}
+
+	for i := 0; i < len(newScratch); i++ {
+		newScratch[i] = a[i] && b[i]
+	}
+
+	return newScratch
+}
+
+// checkUninitializedScratch checks the BPF program doesn't read from uninitialized scratch m[]
+// TODO - Is this the right thing to do?
+// AFAICT the kernel cBPF -> eBPF converter lets uninitialized m[] reads through as eBPF stack reads.
+// Is the eBPF stack 0 initialized?
+func checkUninitializedScratch(blocks []*block) error {
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	// scratchStatus at the start of each block
+	scratch := make(map[*block]scratchStatus)
+
+	// First block starts with nothing initialized
+	scratch[blocks[0]] = scratchStatus{}
+
+	for _, block := range blocks {
+		newScratch, err := checkUninitializedBlock(block, scratch[block])
+		if err != nil {
+			return err
+		}
+
+		// update the status of every block this one jumps to
+		for _, target := range block.jumps {
+			targetScratch, ok := scratch[target]
+			if !ok {
+				scratch[target] = newScratch
+				continue
+			}
+
+			scratch[target] = targetScratch.merge(newScratch)
+		}
+	}
+
+	return nil
+}
+
+func checkUninitializedBlock(block *block, status scratchStatus) (scratchStatus, error) {
+	for pc, insn := range block.insns {
+		switch i := insn.Instruction.(type) {
+
+		case bpf.LoadScratch:
+			if !status[i.N] {
+				return scratchStatus{}, errors.Errorf("insn %d reads uninitialized scratch m[%d]", pc, i.N)
+			}
+
+		case bpf.StoreScratch:
+			status[i.N] = true
+		}
+	}
+
+	return status, nil
 }
