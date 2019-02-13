@@ -1,3 +1,5 @@
+github.com/newtools/ebpf v0.0.0-20190313155020-23e0debb6338 h1:68rsjPpj13mbUGhllinENb/lXUBq6dXhlRLf8ymp1oA=
+github.com/newtools/ebpf v0.0.0-20190313155020-23e0debb6338/go.mod h1:eopbi8xx7pp0S2g/ce/pgCcfR4krkn8UrC7z2M9qCHI=
 github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=

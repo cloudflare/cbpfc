@@ -1,6 +1,11 @@
-// Package cbpfc implements a cBPF (classic BPF) to C compiler.
-// The generated C is intended to be compiled to eBPF
-// (extended BPF, not be confused with cBPF extensions) using clang.
+// Package cbpfc implements a cBPF (classic BPF) to eBPF
+// (extended BPF, not be confused with cBPF extensions) compiler.
+//
+// cbpfc can compile cBPF to:
+// - C, which can be compiled to eBPF with Clang
+// - eBPF
+//
+// Both the C and eBPF output are intended to pass the kernel verifier.
 //
 // The cBPF is split into an ordered list of blocks.
 // A block contains a linear flow on instructions:
