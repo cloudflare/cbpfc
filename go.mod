@@ -1,4 +1,4 @@
-module github.com/cloudflare/ctoebpf
+module github.com/cloudflare/cbpfc
 
 require (
 	github.com/pkg/errors v0.8.1

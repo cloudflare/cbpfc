@@ -1,4 +1,4 @@
-package cbpftoc
+package cbpfc
 
 import (
 	"reflect"

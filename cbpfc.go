@@ -1,4 +1,4 @@
-// Package cbpftoc implements a cBPF (classic BPF) to C compiler.
+// Package cbpfc implements a cBPF (classic BPF) to C compiler.
 // The generated C is intended to be compiled to eBPF
 // (extended BPF, not be confused with cBPF extensions) using clang.
 //
@@ -26,7 +26,7 @@
 // cBPF jumps are relative, these are stored in "skips".
 // These have to be converted to an absolute instruction position
 // or number, "pos".
-package cbpftoc
+package cbpfc
 
 import (
 	"fmt"
