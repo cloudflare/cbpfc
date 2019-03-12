@@ -54,6 +54,17 @@ func TestZeroInitX(t *testing.T) {
 	checkBackends(t, filter, []byte{}, XDPPass)
 }
 
+func TestZeroInitScratch(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		bpf.LoadScratch{Dst: bpf.RegA, N: 7},
+		bpf.RetA{},
+	}
+
+	checkBackends(t, filter, []byte{}, XDPPass)
+}
+
 func TestLoadConstantA(t *testing.T) {
 	t.Parallel()
 

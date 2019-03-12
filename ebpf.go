@@ -95,17 +95,6 @@ func ToEBPF(insns []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) {
 
 	eInsns := []asm.Instruction{}
 
-	// TODO - Better 0 initialization
-	//   m[] should be 0 initialized if it's read from before being written to.
-	//   a & x should only be reset to 0 if they're read from before being written to.
-	// In practice always resetting a & x works, and reading zero initialized m[] is rather pointless,
-	// so no programs seem to rely on it
-	// cbpftoc proper could add 0 init instructions as required so both backends benefit.
-	eInsns = append(eInsns,
-		asm.Mov.Imm32(opts.RegA, 0),
-		asm.Mov.Imm32(opts.RegX, 0),
-	)
-
 	for _, block := range blocks {
 		for i, insn := range block.insns {
 			eInsn, err := insnToEBPF(insn, block, opts)
@@ -242,6 +231,9 @@ func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, 
 			asm.Add.Imm(opts.RegTmp, int32(i.Len)),
 			asm.JGT.Reg(opts.RegTmp, opts.PacketEnd, opts.NoMatchLabel),
 		)
+
+	case initializeScratch:
+		return ebpfInsn(asm.StoreImm(asm.R10, opts.stackOffset(i.N), 0, asm.Word))
 
 	default:
 		return nil, errors.Errorf("unsupported instruction %v", insn)

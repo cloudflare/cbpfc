@@ -148,8 +148,20 @@ func (p packetGuardIndirect) Assemble() (bpf.RawInstruction, error) {
 	return bpf.RawInstruction{}, errors.Errorf("unsupported")
 }
 
+// initializeScratch is a "fake" instruction
+// that zero initializes a scratch position
+type initializeScratch struct {
+	// Scratch position that needs to be initialized
+	N int
+}
+
+// Assemble implements the Instruction Assemble method.
+func (i initializeScratch) Assemble() (bpf.RawInstruction, error) {
+	return bpf.RawInstruction{}, errors.Errorf("unsupported")
+}
+
 // compile compiles a cBPF program to an ordered slice of blocks, with:
-// - Reads from uninitialized scratch m[] rejected
+// - Registers zero initialized as required
 // - Required packet access guards added
 // - JumpIf and JumpIfX instructions normalized (see normalizeJumps)
 func compile(insns []bpf.Instruction) ([]*block, error) {
@@ -168,11 +180,8 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 		return nil, errors.Wrapf(err, "unable to compute blocks")
 	}
 
-	// Check uninitialized scratch usage
-	err = checkUninitializedScratch(blocks)
-	if err != nil {
-		return nil, err
-	}
+	// Initialize registers
+	initializeMemory(blocks)
 
 	// Guard packet loads
 	addPacketGuards(blocks)
@@ -426,15 +435,7 @@ func addIndirectPacketGuard(block *block, guard packetGuardIndirect) packetGuard
 		}
 
 		// Check if we clobbered x - this invalidates the guard
-		clobbered := false
-		switch i := insn.Instruction.(type) {
-		case bpf.LoadConstant:
-			clobbered = i.Dst == bpf.RegX
-		case bpf.LoadScratch:
-			clobbered = i.Dst == bpf.RegX
-		case bpf.LoadMemShift, bpf.TAX:
-			clobbered = true
-		}
+		clobbered := memWrites(insn.Instruction).regs[bpf.RegX]
 
 		// End of block or x clobbered -> create guard for previous instructions
 		if pc == len(block.insns)-1 || clobbered {
@@ -458,70 +459,176 @@ func addIndirectPacketGuard(block *block, guard packetGuardIndirect) packetGuard
 	return guard
 }
 
-// Status of scratch slots (0-15)
-// true: initialized, false uninitialized
-type scratchStatus [16]bool
-
-// merge merges two scratch statuses into one
-func (a scratchStatus) merge(b scratchStatus) scratchStatus {
-	newScratch := scratchStatus{}
-
-	for i := 0; i < len(newScratch); i++ {
-		newScratch[i] = a[i] && b[i]
-	}
-
-	return newScratch
+// memStatus represents a context defined status of registers & scratch
+type memStatus struct {
+	// indexed by bpf.Register
+	regs    [2]bool
+	scratch [16]bool
 }
 
-// checkUninitializedScratch checks the BPF program doesn't read from uninitialized scratch m[]
-// TODO - Is this the right thing to do?
-// AFAICT the kernel cBPF -> eBPF converter lets uninitialized m[] reads through as eBPF stack reads.
-// Is the eBPF stack 0 initialized?
-func checkUninitializedScratch(blocks []*block) error {
-	if len(blocks) == 0 {
-		return nil
+// merge merges this status with the other by applying policy to regs and scratch
+func (r memStatus) merge(other memStatus, policy func(this, other bool) bool) memStatus {
+	newStatus := memStatus{}
+
+	for i := range newStatus.regs {
+		newStatus.regs[i] = policy(r.regs[i], other.regs[i])
 	}
 
-	// scratchStatus at the start of each block
-	scratch := make(map[*block]scratchStatus)
+	for i := range newStatus.scratch {
+		newStatus.scratch[i] = policy(r.scratch[i], other.scratch[i])
+	}
 
-	// First block starts with nothing initialized
-	scratch[blocks[0]] = scratchStatus{}
+	return newStatus
+}
+
+// and merges this status with the other by logical AND
+func (r memStatus) and(other memStatus) memStatus {
+	return r.merge(other, func(this, other bool) bool {
+		return this && other
+	})
+}
+
+// and merges this status with the other by logical OR
+func (r memStatus) or(other memStatus) memStatus {
+	return r.merge(other, func(this, other bool) bool {
+		return this || other
+	})
+}
+
+// initializeMemory zero initializes all the memory (regs & scratch) that the BPF program reads from before writing to.
+func initializeMemory(blocks []*block) {
+	// memory initialized at the start of each block
+	statuses := make(map[*block]memStatus)
+
+	// uninitialized memory used so far
+	uninitialized := memStatus{}
 
 	for _, block := range blocks {
-		newScratch, err := checkUninitializedBlock(block, scratch[block])
-		if err != nil {
-			return err
+		status := statuses[block]
+
+		for _, insn := range block.insns {
+			uninitialized = uninitialized.or(memUninitializedReads(insn.Instruction, status))
+			status = status.or(memWrites(insn.Instruction))
 		}
 
 		// update the status of every block this one jumps to
 		for _, target := range block.jumps {
-			targetScratch, ok := scratch[target]
+			targetStatus, ok := statuses[target]
 			if !ok {
-				scratch[target] = newScratch
+				statuses[target] = status
 				continue
 			}
 
-			scratch[target] = targetScratch.merge(newScratch)
+			// memory needs to be initialized from every possible path
+			statuses[target] = targetStatus.and(status)
 		}
 	}
 
-	return nil
+	for reg, uninit := range uninitialized.regs {
+		if !uninit {
+			continue
+		}
+
+		blocks[0].insert(0, instruction{
+			Instruction: bpf.LoadConstant{
+				Dst: bpf.Register(reg),
+				Val: 0,
+			},
+		})
+	}
+
+	for scratch, uninit := range uninitialized.scratch {
+		if !uninit {
+			continue
+		}
+
+		blocks[0].insert(0, instruction{
+			Instruction: initializeScratch{
+				N: scratch,
+			},
+		})
+	}
 }
 
-func checkUninitializedBlock(block *block, status scratchStatus) (scratchStatus, error) {
-	for pc, insn := range block.insns {
-		switch i := insn.Instruction.(type) {
+// memUninitializedReads returns the memory read by insn that has not yet been initialized according to initialized.
+func memUninitializedReads(insn bpf.Instruction, initialized memStatus) memStatus {
+	return memReads(insn).merge(initialized, func(read, init bool) bool {
+		return read && !init
+	})
+}
 
-		case bpf.LoadScratch:
-			if !status[i.N] {
-				return scratchStatus{}, errors.Errorf("insn %d reads uninitialized scratch m[%d]", pc, i.N)
-			}
+// memReads returns the memory read by insn
+func memReads(insn bpf.Instruction) memStatus {
+	read := memStatus{}
 
-		case bpf.StoreScratch:
-			status[i.N] = true
-		}
+	switch i := insn.(type) {
+	case bpf.ALUOpConstant:
+		read.regs[bpf.RegA] = true
+	case bpf.ALUOpX:
+		read.regs[bpf.RegA] = true
+		read.regs[bpf.RegX] = true
+
+	case bpf.JumpIf:
+		read.regs[bpf.RegA] = true
+	case bpf.JumpIfX:
+		read.regs[bpf.RegA] = true
+		read.regs[bpf.RegX] = true
+
+	case bpf.LoadIndirect:
+		read.regs[bpf.RegX] = true
+	case bpf.LoadScratch:
+		read.scratch[i.N] = true
+
+	case bpf.NegateA:
+		read.regs[bpf.RegA] = true
+
+	case bpf.RetA:
+		read.regs[bpf.RegA] = true
+
+	case bpf.StoreScratch:
+		read.regs[i.Src] = true
+
+	case bpf.TAX:
+		read.regs[bpf.RegA] = true
+	case bpf.TXA:
+		read.regs[bpf.RegX] = true
 	}
 
-	return status, nil
+	return read
+}
+
+// memWrites returns the memory written by insn
+func memWrites(insn bpf.Instruction) memStatus {
+	write := memStatus{}
+
+	switch i := insn.(type) {
+	case bpf.ALUOpConstant:
+		write.regs[bpf.RegA] = true
+	case bpf.ALUOpX:
+		write.regs[bpf.RegA] = true
+
+	case bpf.LoadAbsolute:
+		write.regs[bpf.RegA] = true
+	case bpf.LoadConstant:
+		write.regs[i.Dst] = true
+	case bpf.LoadIndirect:
+		write.regs[bpf.RegA] = true
+	case bpf.LoadMemShift:
+		write.regs[bpf.RegX] = true
+	case bpf.LoadScratch:
+		write.regs[i.Dst] = true
+
+	case bpf.NegateA:
+		write.regs[bpf.RegA] = true
+
+	case bpf.StoreScratch:
+		write.scratch[i.N] = true
+
+	case bpf.TAX:
+		write.regs[bpf.RegX] = true
+	case bpf.TXA:
+		write.regs[bpf.RegA] = true
+	}
+
+	return write
 }

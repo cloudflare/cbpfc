@@ -139,81 +139,247 @@ func TestNormalizeJumps(t *testing.T) {
 	check(t, insns(0, 3), invertedInsns(3, 0))
 }
 
-// scratch reg initialized and used in one block
-func TestInitializedScratch(t *testing.T) {
-	blocks := mustSplitBlocks(t, 1, toInstructions([]bpf.Instruction{
-		// block 0
-		/* 0 */ bpf.StoreScratch{Src: bpf.RegA, N: 2}, // initialize m[2]
-		/* 1 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
-		/* 2 */ bpf.RetA{},
-	}))
+// instruction read / writes
+func TestInstructionReadsRegA(t *testing.T) {
+	checkMemoryStatus(t, map[bpf.Instruction]bool{
+		bpf.ALUOpConstant{}: true,
+		bpf.ALUOpX{}:        true,
 
-	err := checkUninitializedScratch(blocks)
-	if err != nil {
-		t.Fatal(err)
-	}
+		bpf.Jump{}:    false,
+		bpf.JumpIf{}:  true,
+		bpf.JumpIfX{}: true,
+
+		bpf.LoadAbsolute{}:              false,
+		bpf.LoadConstant{Dst: bpf.RegA}: false,
+		bpf.LoadConstant{Dst: bpf.RegX}: false,
+		bpf.LoadIndirect{}:              false,
+		bpf.LoadMemShift{}:              false,
+		bpf.LoadScratch{Dst: bpf.RegA}:  false,
+		bpf.LoadScratch{Dst: bpf.RegX}:  false,
+
+		bpf.NegateA{}: true,
+
+		bpf.RetA{}:        true,
+		bpf.RetConstant{}: false,
+
+		bpf.StoreScratch{Src: bpf.RegA}: true,
+		bpf.StoreScratch{Src: bpf.RegX}: false,
+
+		bpf.TAX{}: true,
+		bpf.TXA{}: false,
+	}, func(insn bpf.Instruction) bool {
+		return memReads(insn).regs[bpf.RegA]
+	})
 }
 
-// scratch reg initialized in both branches
-func TestPartiallyInitializedScratch(t *testing.T) {
-	blocks := mustSplitBlocks(t, 4, toInstructions([]bpf.Instruction{
-		// block 0
-		/* 0 */ bpf.LoadConstant{Dst: bpf.RegA, Val: 3},
-		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
+func TestInstructionWritesRegA(t *testing.T) {
+	checkMemoryStatus(t, map[bpf.Instruction]bool{
+		bpf.ALUOpConstant{}: true,
+		bpf.ALUOpX{}:        true,
 
-		// block 1
-		/* 2 */ bpf.StoreScratch{Src: bpf.RegA, N: 2}, // initialize m[2]
-		/* 3 */ bpf.Jump{Skip: 1}, // jump to block 3
+		bpf.Jump{}:    false,
+		bpf.JumpIf{}:  false,
+		bpf.JumpIfX{}: false,
 
-		// block 2
-		/* 4 */ bpf.StoreScratch{Src: bpf.RegX, N: 2}, // initialize m[2]
-		// fall through to block 3
+		bpf.LoadAbsolute{}:              true,
+		bpf.LoadConstant{Dst: bpf.RegA}: true,
+		bpf.LoadConstant{Dst: bpf.RegX}: false,
+		bpf.LoadIndirect{}:              true,
+		bpf.LoadMemShift{}:              false,
+		bpf.LoadScratch{Dst: bpf.RegA}:  true,
+		bpf.LoadScratch{Dst: bpf.RegX}:  false,
 
-		// block 3
-		/* 5 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
-		/* 6 */ bpf.RetA{},
-	}))
+		bpf.NegateA{}: true,
 
-	err := checkUninitializedScratch(blocks)
-	if err != nil {
-		t.Fatal(err)
+		bpf.RetA{}:        false,
+		bpf.RetConstant{}: false,
+
+		bpf.StoreScratch{Src: bpf.RegA}: false,
+		bpf.StoreScratch{Src: bpf.RegX}: false,
+
+		bpf.TAX{}: false,
+		bpf.TXA{}: true,
+	}, func(insn bpf.Instruction) bool {
+		return memWrites(insn).regs[bpf.RegA]
+	})
+}
+
+func TestInstructionReadsRegX(t *testing.T) {
+	checkMemoryStatus(t, map[bpf.Instruction]bool{
+		bpf.ALUOpConstant{}: false,
+		bpf.ALUOpX{}:        true,
+
+		bpf.Jump{}:    false,
+		bpf.JumpIf{}:  false,
+		bpf.JumpIfX{}: true,
+
+		bpf.LoadAbsolute{}:              false,
+		bpf.LoadConstant{Dst: bpf.RegA}: false,
+		bpf.LoadConstant{Dst: bpf.RegX}: false,
+		bpf.LoadIndirect{}:              true,
+		bpf.LoadMemShift{}:              false,
+		bpf.LoadScratch{Dst: bpf.RegA}:  false,
+		bpf.LoadScratch{Dst: bpf.RegX}:  false,
+
+		bpf.NegateA{}: false,
+
+		bpf.RetA{}:        false,
+		bpf.RetConstant{}: false,
+
+		bpf.StoreScratch{Src: bpf.RegA}: false,
+		bpf.StoreScratch{Src: bpf.RegX}: true,
+
+		bpf.TAX{}: false,
+		bpf.TXA{}: true,
+	}, func(insn bpf.Instruction) bool {
+		return memReads(insn).regs[bpf.RegX]
+	})
+}
+
+func TestInstructionWritesRegX(t *testing.T) {
+	checkMemoryStatus(t, map[bpf.Instruction]bool{
+		bpf.ALUOpConstant{}: false,
+		bpf.ALUOpX{}:        false,
+
+		bpf.Jump{}:    false,
+		bpf.JumpIf{}:  false,
+		bpf.JumpIfX{}: false,
+
+		bpf.LoadAbsolute{}:              false,
+		bpf.LoadConstant{Dst: bpf.RegA}: false,
+		bpf.LoadConstant{Dst: bpf.RegX}: true,
+		bpf.LoadIndirect{}:              false,
+		bpf.LoadMemShift{}:              true,
+		bpf.LoadScratch{Dst: bpf.RegA}:  false,
+		bpf.LoadScratch{Dst: bpf.RegX}:  true,
+
+		bpf.NegateA{}: false,
+
+		bpf.RetA{}:        false,
+		bpf.RetConstant{}: false,
+
+		bpf.StoreScratch{Src: bpf.RegA}: false,
+		bpf.StoreScratch{Src: bpf.RegX}: false,
+
+		bpf.TAX{}: true,
+		bpf.TXA{}: false,
+	}, func(insn bpf.Instruction) bool {
+		return memWrites(insn).regs[bpf.RegX]
+	})
+}
+
+func TestInstructionReadsScratch(t *testing.T) {
+	checkMemoryStatus(t, map[bpf.Instruction]bool{
+		bpf.ALUOpConstant{}: false,
+		bpf.ALUOpX{}:        false,
+
+		bpf.Jump{}:    false,
+		bpf.JumpIf{}:  false,
+		bpf.JumpIfX{}: false,
+
+		bpf.LoadAbsolute{}:                   false,
+		bpf.LoadConstant{Dst: bpf.RegA}:      false,
+		bpf.LoadConstant{Dst: bpf.RegX}:      false,
+		bpf.LoadIndirect{}:                   false,
+		bpf.LoadMemShift{}:                   false,
+		bpf.LoadScratch{Dst: bpf.RegA, N: 3}: true,
+		bpf.LoadScratch{Dst: bpf.RegX, N: 3}: true,
+
+		bpf.NegateA{}: false,
+
+		bpf.RetA{}:        false,
+		bpf.RetConstant{}: false,
+
+		bpf.StoreScratch{Src: bpf.RegA, N: 3}: false,
+		bpf.StoreScratch{Src: bpf.RegX, N: 3}: false,
+
+		bpf.TAX{}: false,
+		bpf.TXA{}: false,
+	}, func(insn bpf.Instruction) bool {
+		return memReads(insn).scratch[3]
+	})
+}
+
+func TestInstructionWritesScratch(t *testing.T) {
+	checkMemoryStatus(t, map[bpf.Instruction]bool{
+		bpf.ALUOpConstant{}: false,
+		bpf.ALUOpX{}:        false,
+
+		bpf.Jump{}:    false,
+		bpf.JumpIf{}:  false,
+		bpf.JumpIfX{}: false,
+
+		bpf.LoadAbsolute{}:                   false,
+		bpf.LoadConstant{Dst: bpf.RegA}:      false,
+		bpf.LoadConstant{Dst: bpf.RegX}:      false,
+		bpf.LoadIndirect{}:                   false,
+		bpf.LoadMemShift{}:                   false,
+		bpf.LoadScratch{Dst: bpf.RegA, N: 3}: false,
+		bpf.LoadScratch{Dst: bpf.RegX, N: 3}: false,
+
+		bpf.NegateA{}: false,
+
+		bpf.RetA{}:        false,
+		bpf.RetConstant{}: false,
+
+		bpf.StoreScratch{Src: bpf.RegA, N: 3}: true,
+		bpf.StoreScratch{Src: bpf.RegX, N: 3}: true,
+
+		bpf.TAX{}: false,
+		bpf.TXA{}: false,
+	}, func(insn bpf.Instruction) bool {
+		return memWrites(insn).scratch[3]
+	})
+}
+
+func checkMemoryStatus(t *testing.T, expected map[bpf.Instruction]bool, test func(bpf.Instruction) bool) {
+	t.Helper()
+
+	for insn, value := range expected {
+		if test(insn) != value {
+			t.Fatalf("Instruction %v expected %v got %v", insn, value, test(insn))
+		}
 	}
 }
 
 // scratch reg uninitialized and used in one block
 func TestUninitializedScratch(t *testing.T) {
-	blocks := mustSplitBlocks(t, 1, toInstructions([]bpf.Instruction{
+	insns := toInstructions([]bpf.Instruction{
 		// block 0
 		/* 0 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
 		/* 1 */ bpf.RetA{},
-	}))
+	})
 
-	err := checkUninitializedScratch(blocks)
-	if err == nil {
-		t.Fatal("uninitialized scratch accepted")
-	}
+	blocks := mustSplitBlocks(t, 1, insns)
+
+	initializeMemory(blocks)
+
+	matchBlock(t, blocks[0], append([]instruction{{Instruction: initializeScratch{N: 2}}}, insns...), nil)
 }
 
 // scratch reg initialized in one branch, but not the other
 func TestPartiallyUninitializedScratch(t *testing.T) {
-	blocks := mustSplitBlocks(t, 3, toInstructions([]bpf.Instruction{
+	insns := toInstructions([]bpf.Instruction{
 		// block 0
 		/* 0 */ bpf.LoadConstant{Dst: bpf.RegA, Val: 3},
 		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 1 or 2
 
 		// block 1
-		/* 2 */ bpf.StoreScratch{Src: bpf.RegA, N: 2}, // initialize m[2]
+		/* 2 */ bpf.StoreScratch{Src: bpf.RegA, N: 5}, // initialize m[2]
 		// fall through to block 2
 
 		// block 2
-		/* 3 */ bpf.LoadScratch{Dst: bpf.RegA, N: 2},
+		/* 3 */ bpf.LoadScratch{Dst: bpf.RegA, N: 5},
 		/* 4 */ bpf.RetA{},
-	}))
+	})
 
-	err := checkUninitializedScratch(blocks)
-	if err == nil {
-		t.Fatal("uninitialized scratch accepted")
-	}
+	blocks := mustSplitBlocks(t, 3, insns)
+
+	initializeMemory(blocks)
+
+	matchBlock(t, blocks[0], append([]instruction{{Instruction: initializeScratch{N: 5}}}, insns[:2]...), nil)
+	matchBlock(t, blocks[1], insns[2:3], nil)
+	matchBlock(t, blocks[2], insns[3:], nil)
 }
 
 // Test block splitting
@@ -513,7 +679,7 @@ func matchBlock(t *testing.T, b *block, expected []instruction, jumps map[pos]*b
 		t.Fatalf("expected instructions %v, got %v", expected, b.insns)
 	}
 
-	if !reflect.DeepEqual(jumps, b.jumps) {
+	if jumps != nil && !reflect.DeepEqual(jumps, b.jumps) {
 		t.Fatalf("expected jumps %v, got %v", jumps, b.jumps)
 	}
 }
