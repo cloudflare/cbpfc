@@ -100,7 +100,7 @@ func (b *block) skipToBlock(s skip) *block {
 	return b.jumps[b.skipToPos(s)]
 }
 
-func (b *block) insert(pos uint, insn instruction) {
+func (b *block) insert(pos int, insn instruction) {
 	b.insns = append(b.insns[:pos], append([]instruction{insn}, b.insns[pos:]...)...)
 }
 
@@ -108,11 +108,13 @@ func (b *block) last() instruction {
 	return b.insns[len(b.insns)-1]
 }
 
+// Greatest known offset into the input packet that is read by the program
+type packetGuard uint32
+
 // packetGuardAbsolute is a "fake" instruction
 // that checks the length of the packet for absolute packet loads
 type packetGuardAbsolute struct {
-	// Length the guard checks. offset + size
-	Len uint32
+	guard packetGuard
 }
 
 // Assemble implements the Instruction Assemble method.
@@ -123,8 +125,7 @@ func (p packetGuardAbsolute) Assemble() (bpf.RawInstruction, error) {
 // packetGuardIndirect is a "fake" instruction
 // that checks the length of the packet for indirect packet loads
 type packetGuardIndirect struct {
-	// Length the guard checks. offset + size
-	Len uint32
+	guard packetGuard
 }
 
 // Assemble implements the Instruction Assemble method.
@@ -184,7 +185,8 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 	}
 
 	// Guard packet loads
-	addPacketGuards(blocks)
+	addAbsolutePacketGuards(blocks)
+	addIndirectPacketGuards(blocks)
 
 	return blocks, nil
 }
@@ -397,7 +399,7 @@ func addDivideByZeroGuards(blocks []*block) error {
 				}
 			case bpf.ALUOpX:
 				if isDivision(i.Op) && !notZero {
-					block.insert(uint(pc), instruction{Instruction: checkXNotZero{}})
+					block.insert(pc, instruction{Instruction: checkXNotZero{}})
 					pc++
 					notZero = true
 				}
@@ -425,121 +427,138 @@ func addDivideByZeroGuards(blocks []*block) error {
 	return nil
 }
 
-// addPacketGuards adds packet guards (absolute and indirect) as required.
+// addAbsolutePacketGuard adds required packet guards for absolute packet accesses to blocks.
+func addAbsolutePacketGuards(blocks []*block) {
+	addPacketGuards(blocks, packetGuardOpts{
+		requiredGuard: func(insns []instruction) (int, packetGuard) {
+			var biggestGuard packetGuard
+
+			for _, insn := range insns {
+				switch i := insn.Instruction.(type) {
+				case bpf.LoadAbsolute:
+					if a := packetGuard(i.Off + uint32(i.Size)); a > biggestGuard {
+						biggestGuard = a
+					}
+				case bpf.LoadMemShift:
+					if a := packetGuard(i.Off + 1); a > biggestGuard {
+						biggestGuard = a
+					}
+				}
+			}
+
+			return len(insns), biggestGuard
+		},
+
+		createInsn: func(guard packetGuard) bpf.Instruction {
+			return packetGuardAbsolute{guard: guard}
+		},
+	})
+}
+
+// addIndirectPacketGuard adds required packet guards for indirect packet accesses to blocks.
+func addIndirectPacketGuards(blocks []*block) {
+	addPacketGuards(blocks, packetGuardOpts{
+		requiredGuard: func(insns []instruction) (int, packetGuard) {
+			var (
+				insnCount    int
+				biggestGuard packetGuard
+			)
+
+			for _, insn := range insns {
+				insnCount++
+
+				switch i := insn.Instruction.(type) {
+				case bpf.LoadIndirect:
+					if a := packetGuard(i.Off + uint32(i.Size)); a > biggestGuard {
+						biggestGuard = a
+					}
+				}
+
+				// Check if we clobbered x - this invalidates the guard
+				if memWrites(insn.Instruction).regs[bpf.RegX] {
+					break
+				}
+			}
+
+			return insnCount, biggestGuard
+		},
+
+		createInsn: func(guard packetGuard) bpf.Instruction {
+			return packetGuardIndirect{guard: guard}
+		},
+	})
+}
+
+type packetGuardOpts struct {
+	// requiredGuard returns:
+	// - the packetGuard needed by insns
+	// - the number of instructions in insns covered by the guard.
+	//   The guard is assumed to be invalidated for the remaining / uncovered insns (eg RegX was clobbered for indirect guards).
+	//   requiredGuard will be called until all instructions are covered.
+	requiredGuard func(insns []instruction) (int, packetGuard)
+
+	// createInsn creates an instruction that checks the packet length against the guard
+	createInsn func(guard packetGuard) bpf.Instruction
+}
+
+// addPacketGuards adds packet guards as required.
 //
 // Traversing the DAG of blocks (by visiting the blocks a block jumps to),
 // we know all packet guards that exist at the start of a given block.
 // We can check if the block requires a longer / bigger guard than
 // the shortest / least existing guard.
-func addPacketGuards(blocks []*block) {
-	if len(blocks) == 0 {
-		return
-	}
-
+func addPacketGuards(blocks []*block, opts packetGuardOpts) {
 	// Guards in effect at the start of each block
 	// Can't jump backwards so we only need to traverse blocks once
-	absoluteGuards := make(map[*block][]packetGuardAbsolute)
-	indirectGuards := make(map[*block][]packetGuardIndirect)
-
-	// first block starts with no guards
-	absoluteGuards[blocks[0]] = []packetGuardAbsolute{{Len: 0}}
-	indirectGuards[blocks[0]] = []packetGuardIndirect{{Len: 0}}
+	guards := make(map[*block][]packetGuard)
 
 	for _, block := range blocks {
-		absolute := addAbsolutePacketGuard(block, leastAbsoluteGuard(absoluteGuards[block]))
-		indirect := addIndirectPacketGuard(block, leastIndirectGuard(indirectGuards[block]))
+		blockGuard := addBlockGuards(block, leastGuard(guards[block]), opts)
 
 		for _, target := range block.jumps {
-			absoluteGuards[target] = append(absoluteGuards[target], absolute)
-			indirectGuards[target] = append(indirectGuards[target], indirect)
+			guards[target] = append(guards[target], blockGuard)
 		}
 	}
 }
 
-// leastAbsoluteGuard gets the packet guard with least Len / lowest range
-func leastAbsoluteGuard(guards []packetGuardAbsolute) packetGuardAbsolute {
-	sort.Slice(guards, func(i, j int) bool {
-		return guards[i].Len < guards[j].Len
-	})
+// addBlockGuards add the guards required for the instructions in block.
+func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts) packetGuard {
+	// Start of the current pseudo block in case guard is reset / invalidated
+	start := 0
 
-	return guards[0]
+	for start < len(block.insns) {
+		// The guard has been reset for the next instructions
+		if start != 0 {
+			currentGuard = 0
+		}
+
+		insnsCovered, insnsGuard := opts.requiredGuard(block.insns[start:])
+
+		if insnsGuard != 0 && insnsGuard > currentGuard {
+			currentGuard = insnsGuard
+			block.insert(start, instruction{Instruction: opts.createInsn(insnsGuard)})
+			// Skip over the extra instruction we've just addedd
+			start++
+		}
+
+		start += insnsCovered
+	}
+
+	return currentGuard
 }
 
-// leastIndirectGuard gets the packet guard with least Len / lowest range
-func leastIndirectGuard(guards []packetGuardIndirect) packetGuardIndirect {
-	sort.Slice(guards, func(i, j int) bool {
-		return guards[i].Len < guards[j].Len
-	})
+// leastGuard returns the smallest guard from guards.
+// 0 if there are no guards.
+func leastGuard(guards []packetGuard) packetGuard {
+	var least packetGuard
 
-	return guards[0]
-}
-
-// addAbsolutePacketGuard adds required packet guards to a block knowing the least guard in effect at the start of block.
-// The guard in effect at the end of the block is returned (may be nil).
-func addAbsolutePacketGuard(block *block, guard packetGuardAbsolute) packetGuardAbsolute {
-	var biggestLen uint32
-
-	for _, insn := range block.insns {
-		switch i := insn.Instruction.(type) {
-		case bpf.LoadAbsolute:
-			if a := i.Off + uint32(i.Size); a > biggestLen {
-				biggestLen = a
-			}
-		case bpf.LoadMemShift:
-			if a := i.Off + 1; a > biggestLen {
-				biggestLen = a
-			}
+	for i, guard := range guards {
+		if i == 0 || guard < least {
+			least = guard
 		}
 	}
 
-	if biggestLen > guard.Len {
-		guard = packetGuardAbsolute{
-			Len: biggestLen,
-		}
-		block.insert(0, instruction{Instruction: guard})
-	}
-
-	return guard
-}
-
-// addIndirectPacketGuard adds required packet guards to a block knowing the least guard in effect at the start of block.
-// The guard in effect at the end of the block is returned (may be nil).
-func addIndirectPacketGuard(block *block, guard packetGuardIndirect) packetGuardIndirect {
-	var biggestLen, start uint32
-
-	for pc := 0; pc < len(block.insns); pc++ {
-		insn := block.insns[pc]
-
-		switch i := insn.Instruction.(type) {
-		case bpf.LoadIndirect:
-			if a := i.Off + uint32(i.Size); a > biggestLen {
-				biggestLen = a
-			}
-		}
-
-		// Check if we clobbered x - this invalidates the guard
-		clobbered := memWrites(insn.Instruction).regs[bpf.RegX]
-
-		// End of block or x clobbered -> create guard for previous instructions
-		if pc == len(block.insns)-1 || clobbered {
-			if biggestLen > guard.Len {
-				guard = packetGuardIndirect{
-					Len: biggestLen,
-				}
-				block.insert(uint(start), instruction{Instruction: guard})
-				pc++ // Skip the instruction we've just added
-			}
-		}
-
-		if clobbered {
-			// New pseudo block starts here
-			start = uint32(pc) + 1
-			guard = packetGuardIndirect{Len: 0}
-			biggestLen = 0
-		}
-	}
-
-	return guard
+	return least
 }
 
 // memStatus represents a context defined status of registers & scratch
