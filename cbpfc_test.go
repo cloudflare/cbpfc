@@ -374,7 +374,10 @@ func TestUninitializedScratch(t *testing.T) {
 
 	initializeMemory(blocks)
 
-	matchBlock(t, blocks[0], append([]instruction{{Instruction: initializeScratch{N: 2}}}, insns...), nil)
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: initializeScratch{N: 2}}},
+		insns,
+	), nil)
 }
 
 // scratch reg initialized in one branch, but not the other
@@ -397,7 +400,10 @@ func TestPartiallyUninitializedScratch(t *testing.T) {
 
 	initializeMemory(blocks)
 
-	matchBlock(t, blocks[0], append([]instruction{{Instruction: initializeScratch{N: 5}}}, insns[:2]...), nil)
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: initializeScratch{N: 5}}},
+		insns[:2],
+	), nil)
 	matchBlock(t, blocks[1], insns[2:3], nil)
 	matchBlock(t, blocks[2], insns[3:], nil)
 }
@@ -780,7 +786,7 @@ func TestAbsoluteGuardParentsOK(t *testing.T) {
 
 		// block 3
 		/* 5 */ bpf.LoadAbsolute{Size: 1, Off: 9}, // guard 10
-		/* 6 */ bpf.RetConstant{},
+		/* 6 */ bpf.RetA{},
 	})
 
 	blocks := mustSplitBlocks(t, 4, insns)
@@ -796,24 +802,22 @@ func TestAbsoluteGuardParentsOK(t *testing.T) {
 	matchBlock(t, blocks[3], insns[5:], nil)
 }
 
-// Check we add new guards if parent guards are not long / big enough
-func TestAbsoluteGuardParentsNOK(t *testing.T) {
+// Check the parent guard is extended to cover children that always return no match
+func TestAbsoluteGuardParentNoMatch(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
 		// block 0
 		/* 0 */ bpf.LoadAbsolute{Size: 4, Off: 10}, // guard 14
-		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 1 or 3
 
 		// block 1
-		/* 2 */ bpf.LoadAbsolute{Size: 4, Off: 10}, // guard 14
-		/* 3 */ bpf.Jump{Skip: 1}, // jump to block 3
+		/* 2 */ bpf.LoadAbsolute{Size: 4, Off: 12}, // guard 16
+		/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 2 or 3
 
 		// block 2
-		/* 4 */ bpf.LoadAbsolute{Size: 2, Off: 8}, // guard 10
-		// fall through to block 3
+		/* 4 */ bpf.RetA{}, // potential match
 
 		// block 3
-		/* 5 */ bpf.LoadAbsolute{Size: 1, Off: 15}, // guard 16
-		/* 6 */ bpf.RetConstant{},
+		/* 5 */ bpf.RetConstant{}, // no match
 	})
 
 	blocks := mustSplitBlocks(t, 4, insns)
@@ -821,14 +825,78 @@ func TestAbsoluteGuardParentsNOK(t *testing.T) {
 	addAbsolutePacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 14}}},
+		[]instruction{{Instruction: packetGuardAbsolute{guard: 16}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
 	matchBlock(t, blocks[2], insns[4:5], nil)
-	matchBlock(t, blocks[3], join(
+	matchBlock(t, blocks[3], insns[5:], nil)
+}
+
+// Check the parent guard is extended to cover indirect children that always return no match
+func TestAbsoluteGuardParentDeepNoMatch(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadAbsolute{Size: 4, Off: 10}, // guard 14
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 5}, // jump to block 1 or 4
+
+		// block 1
+		/* 2 */ bpf.LoadAbsolute{Size: 4, Off: 12}, // guard 16
+		/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 2 or 4
+
+		// block 2
+		/* 4 */ bpf.LoadAbsolute{Size: 4, Off: 14}, // guard 18
+		/* 5 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 3 or 4
+
+		// block 3
+		/* 6 */ bpf.RetA{}, // potential match
+
+		// block 4
+		/* 7 */ bpf.RetConstant{}, // no match
+	})
+
+	blocks := mustSplitBlocks(t, 5, insns)
+
+	addAbsolutePacketGuards(blocks)
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: packetGuardAbsolute{guard: 18}}},
+		insns[:2],
+	), nil)
+	matchBlock(t, blocks[1], insns[2:4], nil)
+	matchBlock(t, blocks[2], insns[4:6], nil)
+	matchBlock(t, blocks[3], insns[6:7], nil)
+	matchBlock(t, blocks[4], insns[7:], nil)
+}
+
+// Check the parent guard isn't extended to cover children that could match
+func TestAbsoluteGuardParentMatch(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadAbsolute{Size: 4, Off: 10}, // guard 14
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
+
+		// block 1
+		/* 2 */ bpf.LoadAbsolute{Size: 4, Off: 11}, // guard 15
+		/* 3 */ bpf.RetA{}, // potential match
+
+		// block 2
+		/* 4 */ bpf.LoadAbsolute{Size: 1, Off: 15}, // guard 16
+		/* 5 */ bpf.RetConstant{}, // no match
+	})
+
+	blocks := mustSplitBlocks(t, 3, insns)
+
+	addAbsolutePacketGuards(blocks)
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: packetGuardAbsolute{guard: 15}}},
+		insns[:2],
+	), nil)
+	matchBlock(t, blocks[1], insns[2:4], nil)
+	matchBlock(t, blocks[2], join(
 		[]instruction{{Instruction: packetGuardAbsolute{guard: 16}}},
-		insns[5:],
+		insns[4:],
 	), nil)
 }
 
@@ -909,7 +977,7 @@ func TestIndirectGuardParentsOK(t *testing.T) {
 
 		// block 3
 		/* 5 */ bpf.LoadIndirect{Size: 1, Off: 9}, // guard 10
-		/* 6 */ bpf.RetConstant{},
+		/* 6 */ bpf.RetA{},
 	})
 
 	blocks := mustSplitBlocks(t, 4, insns)
@@ -925,155 +993,194 @@ func TestIndirectGuardParentsOK(t *testing.T) {
 	matchBlock(t, blocks[3], insns[5:], nil)
 }
 
-// Check we add new guards if parent guards are not long / big enough
-func TestIndirectGuardParentsNOK(t *testing.T) {
+// Check the parent guard is extended to cover children that always return no match
+func TestIndirectGuardParentNoMatch(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 1 or 3
+
+		// block 1
+		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 12}, // guard 16
+		/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 2 or 3
+
+		// block 2
+		/* 4 */ bpf.RetA{}, // potential match
+
+		// block 3
+		/* 5 */ bpf.RetConstant{}, // no match
+	})
+
+	blocks := mustSplitBlocks(t, 4, insns)
+
+	addIndirectPacketGuards(blocks)
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: packetGuardIndirect{guard: 16}}},
+		insns[:2],
+	), nil)
+	matchBlock(t, blocks[1], insns[2:4], nil)
+	matchBlock(t, blocks[2], insns[4:5], nil)
+	matchBlock(t, blocks[3], insns[5:], nil)
+}
+
+// Check the parent guard is extended to cover indirect children that always return no match
+func TestIndirectGuardParentDeepNoMatch(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 5}, // jump to block 1 or 4
+
+		// block 1
+		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 12}, // guard 16
+		/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 2 or 4
+
+		// block 2
+		/* 4 */ bpf.LoadIndirect{Size: 4, Off: 14}, // guard 18
+		/* 5 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 3 or 4
+
+		// block 3
+		/* 6 */ bpf.RetA{}, // potential match
+
+		// block 4
+		/* 7 */ bpf.RetConstant{}, // no match
+	})
+
+	blocks := mustSplitBlocks(t, 5, insns)
+
+	addIndirectPacketGuards(blocks)
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: packetGuardIndirect{guard: 18}}},
+		insns[:2],
+	), nil)
+	matchBlock(t, blocks[1], insns[2:4], nil)
+	matchBlock(t, blocks[2], insns[4:6], nil)
+	matchBlock(t, blocks[3], insns[6:7], nil)
+	matchBlock(t, blocks[4], insns[7:], nil)
+}
+
+// Check the parent guard isn't extended to cover children that could match
+func TestIndirectGuardParentMatch(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
 		// block 0
 		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
 		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
 
 		// block 1
-		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 3 */ bpf.Jump{Skip: 1}, // jump to block 3
+		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 11}, // guard 15
+		/* 3 */ bpf.RetA{}, // potential match
 
 		// block 2
-		/* 4 */ bpf.LoadIndirect{Size: 2, Off: 8}, // guard 10
-		// fall through to block 3
-
-		// block 3
-		/* 5 */ bpf.LoadIndirect{Size: 1, Off: 15}, // guard 16
-		/* 6 */ bpf.RetConstant{},
+		/* 4 */ bpf.LoadIndirect{Size: 1, Off: 15}, // guard 16
+		/* 5 */ bpf.RetConstant{}, // no match
 	})
 
-	blocks := mustSplitBlocks(t, 4, insns)
+	blocks := mustSplitBlocks(t, 3, insns)
 
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+		[]instruction{{Instruction: packetGuardIndirect{guard: 15}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
-	matchBlock(t, blocks[2], insns[4:5], nil)
-	matchBlock(t, blocks[3], join(
+	matchBlock(t, blocks[2], join(
 		[]instruction{{Instruction: packetGuardIndirect{guard: 16}}},
-		insns[5:],
+		insns[4:],
 	), nil)
 }
 
-// Check we add new guards if one of the parent guards is not long / big enough due to LoadConstant clobber
-func TestIndirectGuardClobberConstant(t *testing.T) {
-	insns := toInstructions([]bpf.Instruction{
-		// block 0
-		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 1 or 2
+// Check we add new guards if one of the parent guards is not long / big enough due to RegX clobber
+func TestIndirectGuardParentClobber(t *testing.T) {
+	check := func(clobber bpf.Instruction) func(t *testing.T) {
+		return func(t *testing.T) {
+			insns := toInstructions([]bpf.Instruction{
+				// block 0
+				/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
+				/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 1 or 2
 
-		// block 1
-		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 3 */ bpf.LoadConstant{Dst: bpf.RegX}, // clobber X, packet guard no longer valid
-		/* 4 */ bpf.Jump{Skip: 1}, // jump to block 3
+				// block 1
+				/* 2 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
+				/* 3 */ clobber, // clobber X, packet guard no longer valid
+				/* 4 */ bpf.Jump{Skip: 1}, // jump to block 3
 
-		// block 2
-		/* 5 */ bpf.LoadIndirect{Size: 2, Off: 8}, // guard 10
-		// fall through to block 3
+				// block 2
+				/* 5 */ bpf.LoadIndirect{Size: 2, Off: 8}, // guard 10
+				// fall through to block 3
 
-		// block 3
-		/* 6 */ bpf.LoadIndirect{Size: 1, Off: 1}, // guard 2
-		/* 7 */ bpf.RetConstant{},
-	})
+				// block 3
+				/* 6 */ bpf.LoadIndirect{Size: 1, Off: 1}, // guard 2
+				/* 7 */ bpf.RetA{},
+			})
 
-	blocks := mustSplitBlocks(t, 4, insns)
+			blocks := mustSplitBlocks(t, 4, insns)
 
-	addIndirectPacketGuards(blocks)
+			addIndirectPacketGuards(blocks)
 
-	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
-		insns[:2],
-	), nil)
-	matchBlock(t, blocks[1], insns[2:5], nil)
-	matchBlock(t, blocks[2], insns[5:6], nil)
-	matchBlock(t, blocks[3], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 2}}},
-		insns[6:],
-	), nil)
+			matchBlock(t, blocks[0], join(
+				[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+				insns[:2],
+			), nil)
+			matchBlock(t, blocks[1], insns[2:5], nil)
+			matchBlock(t, blocks[2], insns[5:6], nil)
+			matchBlock(t, blocks[3], join(
+				[]instruction{{Instruction: packetGuardIndirect{guard: 2}}},
+				insns[6:],
+			), nil)
+		}
+	}
+
+	t.Run("constant", check(bpf.LoadConstant{Dst: bpf.RegX}))
+	t.Run("scratch", check(bpf.LoadScratch{Dst: bpf.RegX}))
+	t.Run("memshift", check(bpf.LoadMemShift{Off: 2}))
 }
 
-// Check we add new guards if one of the parent guards is not long / big enough due to LoadScratch clobber
-func TestIndirectGuardClobberScratch(t *testing.T) {
-	insns := toInstructions([]bpf.Instruction{
-		// block 0
-		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 1 or 2
+// Check we don't extend guards past RegX clobbers
+func TestIndirectGuardExtendClobber(t *testing.T) {
+	check := func(clobber bpf.Instruction) func(t *testing.T) {
+		return func(t *testing.T) {
+			insns := toInstructions([]bpf.Instruction{
+				// block 0
+				/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
+				/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 5}, // jump to block 1 or 4
 
-		// block 1
-		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 3 */ bpf.LoadScratch{Dst: bpf.RegX}, // clobber X, packet guard no longer valid
-		/* 4 */ bpf.Jump{Skip: 1}, // jump to block 3
+				// block 1
+				/* 2 */ clobber, // clobber X, packet guard no longer valid
+				/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 2 or 4
 
-		// block 2
-		/* 5 */ bpf.LoadIndirect{Size: 2, Off: 8}, // guard 10
-		// fall through to block 3
+				// block 2
+				/* 4 */ bpf.LoadIndirect{Size: 4, Off: 14}, // guard 18
+				/* 5 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 3 or 4
 
-		// block 3
-		/* 6 */ bpf.LoadIndirect{Size: 1, Off: 1}, // guard 2
-		/* 7 */ bpf.RetConstant{},
-	})
+				// block 3
+				/* 6 */ bpf.RetA{}, // potential match
 
-	blocks := mustSplitBlocks(t, 4, insns)
+				// block 4
+				/* 7 */ bpf.RetConstant{}, // no match
+			})
 
-	addIndirectPacketGuards(blocks)
+			blocks := mustSplitBlocks(t, 5, insns)
 
-	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
-		insns[:2],
-	), nil)
-	matchBlock(t, blocks[1], insns[2:5], nil)
-	matchBlock(t, blocks[2], insns[5:6], nil)
-	matchBlock(t, blocks[3], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 2}}},
-		insns[6:],
-	), nil)
-}
+			addIndirectPacketGuards(blocks)
 
-// Check we add new guards if one of the parent guards is not long / big enough due to LoadMemShift clobber
-func TestIndirectGuardClobberMemShift(t *testing.T) {
-	insns := toInstructions([]bpf.Instruction{
-		// block 0
-		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 3}, // jump to block 1 or 2
+			matchBlock(t, blocks[0], join(
+				[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+				insns[:2],
+			), nil)
+			matchBlock(t, blocks[1], insns[2:4], nil)
+			matchBlock(t, blocks[2], join(
+				[]instruction{{Instruction: packetGuardIndirect{guard: 18}}},
+				insns[4:6],
+			), nil)
+			matchBlock(t, blocks[3], insns[6:7], nil)
+			matchBlock(t, blocks[4], insns[7:], nil)
+		}
+	}
 
-		// block 1
-		/* 2 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
-		/* 3 */ bpf.LoadMemShift{Off: 2}, // clobber X, packet guard no longer valid. requires absolute packet guard
-		/* 4 */ bpf.Jump{Skip: 1}, // jump to block 3
-
-		// block 2
-		/* 5 */ bpf.LoadIndirect{Size: 2, Off: 8}, // guard 10
-		// fall through to block 3
-
-		// block 3
-		/* 6 */ bpf.LoadIndirect{Size: 1, Off: 1}, // guard 2
-		/* 7 */ bpf.RetConstant{},
-	})
-
-	blocks := mustSplitBlocks(t, 4, insns)
-
-	addAbsolutePacketGuards(blocks)
-	addIndirectPacketGuards(blocks)
-
-	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
-		insns[:2],
-	), nil)
-	matchBlock(t, blocks[1], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 3}}},
-		insns[2:5],
-	), nil)
-	matchBlock(t, blocks[2], insns[5:6], nil)
-	matchBlock(t, blocks[3], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 2}}},
-		insns[6:],
-	), nil)
+	t.Run("constant", check(bpf.LoadConstant{Dst: bpf.RegX}))
+	t.Run("scratch", check(bpf.LoadScratch{Dst: bpf.RegX}))
+	t.Run("memshift", check(bpf.LoadMemShift{Off: 2}))
 }
 
 func join(insns ...[]instruction) []instruction {

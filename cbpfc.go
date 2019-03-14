@@ -534,7 +534,21 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 
 		insnsCovered, insnsGuard := opts.requiredGuard(block.insns[start:])
 
+		// Need a bigger guard for these insns
 		if insnsGuard != 0 && insnsGuard > currentGuard {
+
+			// Last guard we need for this block -> what our children / target blocks will start with
+			if start+insnsCovered >= len(block.insns) {
+
+				// If packets must go through a bigger guard (guaranteed guard) to match, we can use the guaranteed guard here,
+				// without changing the return value of the program:
+				//   - packets smaller than the guaranteed guard cannot match anyways, we can safely reject them earlier
+				//   - packets bigger than the guaranteed guard won't be affected by it
+				if guaranteed := guaranteedGuard(block.jumps, opts); guaranteed > insnsGuard {
+					insnsGuard = guaranteed
+				}
+			}
+
 			currentGuard = insnsGuard
 			block.insert(start, instruction{Instruction: opts.createInsn(insnsGuard)})
 			// Skip over the extra instruction we've just addedd
@@ -545,6 +559,48 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 	}
 
 	return currentGuard
+}
+
+// guaranteedGuard performs a recursive depth first search of blocks in target to determine
+// the greatest packet guard that must be made for a packet to match
+//
+// If the DAG of blocks needs these packet guards:
+//
+//           [4]
+//          /   \
+//      false   [6]
+//             /   \
+//          true   [8]
+//                /   \
+//            false   true
+//
+// A packet can only match ("true") by going through guards 4 and 6. It does not have to go through guard 8.
+// guaranteedGuard would return 6.
+func guaranteedGuard(targets map[pos]*block, opts packetGuardOpts) packetGuard {
+	targetGuards := []packetGuard{}
+
+	for _, target := range targets {
+		// Block can't match the packet, ignore it
+		if blockNeverMatches(target) {
+			continue
+		}
+
+		insnsCovered, insnsGuard := opts.requiredGuard(target.insns)
+
+		// Guard invalidated by block, stop exploring
+		if insnsCovered < len(target.insns) {
+			targetGuards = append(targetGuards, insnsGuard)
+			continue
+		}
+
+		if guaranteed := guaranteedGuard(target.jumps, opts); guaranteed > insnsGuard {
+			insnsGuard = guaranteed
+		}
+
+		targetGuards = append(targetGuards, insnsGuard)
+	}
+
+	return leastGuard(targetGuards)
 }
 
 // leastGuard returns the smallest guard from guards.
@@ -559,6 +615,20 @@ func leastGuard(guards []packetGuard) packetGuard {
 	}
 
 	return least
+}
+
+// blockNeverMatches returns true IFF the insns in block will never match the input packet
+func blockNeverMatches(block *block) bool {
+	for _, insn := range block.insns {
+		switch i := insn.Instruction.(type) {
+		case bpf.RetConstant:
+			if i.Val == 0 {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // memStatus represents a context defined status of registers & scratch
