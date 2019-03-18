@@ -160,6 +160,16 @@ func (i initializeScratch) Assemble() (bpf.RawInstruction, error) {
 	return bpf.RawInstruction{}, errors.Errorf("unsupported")
 }
 
+// checksXNotZero is a "fake" instruction
+// that returns no match if X is 0
+type checkXNotZero struct {
+}
+
+// Assemble implements the Instruction Assemble method.
+func (c checkXNotZero) Assemble() (bpf.RawInstruction, error) {
+	return bpf.RawInstruction{}, errors.Errorf("unsupported")
+}
+
 // compile compiles a cBPF program to an ordered slice of blocks, with:
 // - Registers zero initialized as required
 // - Required packet access guards added
@@ -182,6 +192,12 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 
 	// Initialize registers
 	initializeMemory(blocks)
+
+	// Check we don't divide by zero
+	err = addDivideByZeroGuards(blocks)
+	if err != nil {
+		return nil, err
+	}
 
 	// Guard packet loads
 	addPacketGuards(blocks)
@@ -344,6 +360,58 @@ func sortTargets(targets map[pos][]targetBlock) []pos {
 	})
 
 	return keys
+}
+
+// addDivideByZeroGuards adds runtime guards / checks to ensure
+// the program returns no match when it would otherwise divide by zero.
+func addDivideByZeroGuards(blocks []*block) error {
+	isDivision := func(op bpf.ALUOp) bool {
+		return op == bpf.ALUOpDiv || op == bpf.ALUOpMod
+	}
+
+	// Is RegX known to be none 0 at the start of each block
+	// We can't divide by RegA, only need to check RegX.
+	xNotZero := make(map[*block]bool)
+
+	for _, block := range blocks {
+		notZero := xNotZero[block]
+
+		for pc := 0; pc < len(block.insns); pc++ {
+			insn := block.insns[pc]
+
+			switch i := insn.Instruction.(type) {
+			case bpf.ALUOpConstant:
+				if isDivision(i.Op) && i.Val == 0 {
+					return errors.Errorf("instruction %v divides by 0", insn)
+				}
+			case bpf.ALUOpX:
+				if isDivision(i.Op) && !notZero {
+					block.insert(uint(pc), instruction{Instruction: checkXNotZero{}})
+					pc++
+					notZero = true
+				}
+			}
+
+			// check if X clobbered - check is invalidated
+			if memWrites(insn.Instruction).regs[bpf.RegX] {
+				notZero = false
+			}
+		}
+
+		// update the status of every block this one jumps to
+		for _, target := range block.jumps {
+			targetNotZero, ok := xNotZero[target]
+			if !ok {
+				xNotZero[target] = notZero
+				continue
+			}
+
+			// x needs to be not zero from every possible path
+			xNotZero[target] = targetNotZero && notZero
+		}
+	}
+
+	return nil
 }
 
 // addPacketGuards traverses the DAG of blocks,

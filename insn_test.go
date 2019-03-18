@@ -286,6 +286,24 @@ func TestALUDiv(t *testing.T) {
 	checkAlu(t, bpf.ALUOpDiv, 19, 3, 6)
 }
 
+func TestALUDivZero(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		bpf.LoadAbsolute{Size: 1, Off: 0},
+		bpf.TAX{},
+
+		bpf.LoadConstant{Dst: bpf.RegA, Val: 10},
+
+		bpf.ALUOpX{Op: bpf.ALUOpDiv},
+
+		bpf.RetConstant{Val: 1},
+	}
+
+	checkBackends(t, filter, []byte{0}, XDPPass)
+	checkBackends(t, filter, []byte{1}, XDPDrop)
+}
+
 func TestALUOr(t *testing.T) {
 	t.Parallel()
 

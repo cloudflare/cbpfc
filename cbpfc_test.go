@@ -429,6 +429,288 @@ func TestBlocksJumpIfX(t *testing.T) {
 	matchBlock(t, blocks[2], insns[4:5], map[pos]*block{})
 }
 
+// Division by constant 0
+func TestDivisionByZeroImm(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		blocks := mustSplitBlocks(t, 1, toInstructions([]bpf.Instruction{
+			bpf.ALUOpConstant{Op: op, Val: 0},
+			bpf.RetConstant{},
+		}))
+
+		err := addDivideByZeroGuards(blocks)
+		if err == nil {
+			t.Fatal("Division by constant 0 not rejected")
+		}
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+// Division by RegX
+func TestDivisionByZeroX(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			bpf.LoadAbsolute{Size: 1, Off: 0},
+			bpf.TXA{},
+			bpf.ALUOpX{Op: op},
+			bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:],
+		), nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+// Division by RegX twice in same block
+func TestDivisionByZeroXTwice(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			bpf.LoadAbsolute{Size: 1, Off: 0},
+			bpf.TXA{},
+			bpf.ALUOpX{Op: op},
+			bpf.ALUOpX{Op: op},
+			bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:],
+		), nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+// Division by RegX after RegX clobbered
+func TestDivisionByZeroXConstant(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			bpf.LoadAbsolute{Size: 1, Off: 0},
+			bpf.TXA{},
+			bpf.ALUOpX{Op: op},
+
+			bpf.LoadConstant{Dst: bpf.RegX}, // Clobber X
+			bpf.ALUOpX{Op: op},
+
+			bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:4],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[4:],
+		), nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+func TestDivisionByZeroXMemShift(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			bpf.LoadAbsolute{Size: 1, Off: 0},
+			bpf.TXA{},
+			bpf.ALUOpX{Op: op},
+
+			bpf.LoadMemShift{Off: 2}, // Clobber X
+			bpf.ALUOpX{Op: op},
+
+			bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:4],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[4:],
+		), nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+func TestDivisionByZeroXTXA(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			bpf.LoadAbsolute{Size: 1, Off: 0},
+			bpf.TXA{},
+			bpf.ALUOpX{Op: op},
+
+			bpf.TAX{}, // Clobber X
+			bpf.ALUOpX{Op: op},
+
+			bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:4],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[4:],
+		), nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+// Check we use parent guards
+func TestDivisionByZeroParentsOK(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			// block 0
+			/* 0 */ bpf.LoadAbsolute{Size: 1, Off: 0},
+			/* 1 */ bpf.TXA{},
+			/* 2 */ bpf.ALUOpX{Op: op},
+			/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
+
+			// block 1
+			/* 4 */ bpf.LoadAbsolute{Size: 1, Off: 1},
+			/* 5 */ bpf.Jump{Skip: 1}, // jump to block 3
+
+			// block 2
+			/* 6 */ bpf.LoadAbsolute{Size: 1, Off: 2},
+			// fall through to block 3
+
+			// block 3
+			/* 7 */ bpf.ALUOpX{Op: op},
+			/* 8 */ bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 4, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:4],
+		), nil)
+		matchBlock(t, blocks[1], insns[4:6], nil)
+		matchBlock(t, blocks[2], insns[6:7], nil)
+		matchBlock(t, blocks[3], insns[7:], nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
+// Check we add new guards with partial parent guards
+func TestDivisionByZeroParentsNOK(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			// block 0
+			/* 0 */ bpf.LoadAbsolute{Size: 1, Off: 0},
+			/* 1 */ bpf.TXA{},
+			/* 2 */ bpf.ALUOpX{Op: op},
+			/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 2}, // jump to block 1 or 2
+
+			// block 1
+			/* 4 */ bpf.LoadMemShift{Off: 1}, // clobber X
+			/* 5 */ bpf.Jump{Skip: 1}, // jump to block 3
+
+			// block 2
+			/* 6 */ bpf.LoadAbsolute{Size: 1, Off: 2},
+			// fall through to block 3
+
+			// block 3
+			/* 7 */ bpf.ALUOpX{Op: op},
+			/* 8 */ bpf.RetConstant{},
+		})
+
+		blocks := mustSplitBlocks(t, 4, insns)
+
+		err := addDivideByZeroGuards(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		matchBlock(t, blocks[0], join(
+			insns[:2],
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[2:4],
+		), nil)
+		matchBlock(t, blocks[1], insns[4:6], nil)
+		matchBlock(t, blocks[2], insns[6:7], nil)
+		matchBlock(t, blocks[3], join(
+			[]instruction{{Instruction: checkXNotZero{}}},
+			insns[7:],
+		), nil)
+	}
+
+	test(t, bpf.ALUOpDiv)
+	test(t, bpf.ALUOpMod)
+}
+
 // Test absolute guards
 func TestAbsoluteGuardSize(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
@@ -669,6 +951,16 @@ func TestIndirectGuardClobberMemShift(t *testing.T) {
 	matchBlock(t, blocks[1], append([]instruction{{Instruction: packetGuardAbsolute{Len: 3}}}, insns[2:5]...), map[pos]*block{6: blocks[3]})
 	matchBlock(t, blocks[2], insns[5:6], map[pos]*block{6: blocks[3]})
 	matchBlock(t, blocks[3], append([]instruction{{Instruction: packetGuardIndirect{Len: 2}}}, insns[6:]...), map[pos]*block{})
+}
+
+func join(insns ...[]instruction) []instruction {
+	res := []instruction{}
+
+	for _, insn := range insns {
+		res = append(res, insn...)
+	}
+
+	return res
 }
 
 // matchBlock checks a block has the given instructions and jumps

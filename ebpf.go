@@ -235,6 +235,9 @@ func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, 
 	case initializeScratch:
 		return ebpfInsn(asm.StoreImm(asm.R10, opts.stackOffset(i.N), 0, asm.Word))
 
+	case checkXNotZero:
+		return ebpfInsn(asm.JEq.Imm(opts.RegX, 0, opts.NoMatchLabel))
+
 	default:
 		return nil, errors.Errorf("unsupported instruction %v", insn)
 	}

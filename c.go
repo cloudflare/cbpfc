@@ -182,6 +182,9 @@ func insnToC(insn instruction, blk *block) (string, error) {
 	case initializeScratch:
 		return stat("m[%d] = 0;", i.N)
 
+	case checkXNotZero:
+		return stat("if (x == 0) return false;")
+
 	default:
 		return "", errors.Errorf("unsupported instruction %v", insn)
 	}
