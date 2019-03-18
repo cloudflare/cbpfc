@@ -16,6 +16,26 @@ func TestZero(t *testing.T) {
 	}
 }
 
+func TestRaw(t *testing.T) {
+	_, err := compile([]bpf.Instruction{
+		bpf.RawInstruction{},
+	})
+
+	if err == nil {
+		t.Fatal("raw instruction accepted", err)
+	}
+}
+
+func TestExtension(t *testing.T) {
+	_, err := compile([]bpf.Instruction{
+		bpf.LoadExtension{},
+	})
+
+	if err == nil {
+		t.Fatal("load extension accepted", err)
+	}
+}
+
 // Test out of bound jumps
 func TestJumpOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{

@@ -175,9 +175,9 @@ func (c checkXNotZero) Assemble() (bpf.RawInstruction, error) {
 // - Required packet access guards added
 // - JumpIf and JumpIfX instructions normalized (see normalizeJumps)
 func compile(insns []bpf.Instruction) ([]*block, error) {
-	// Can't do anything meaningful with no instructions
-	if len(insns) == 0 {
-		return nil, errors.New("can't campile 0 instructions")
+	err := validateInstructions(insns)
+	if err != nil {
+		return nil, err
 	}
 
 	instructions := toInstructions(insns)
@@ -203,6 +203,29 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 	addPacketGuards(blocks)
 
 	return blocks, nil
+}
+
+// validateInstructions checks the instructions are valid, and we support them
+func validateInstructions(insns []bpf.Instruction) error {
+	// Can't do anything meaningful with no instructions
+	if len(insns) == 0 {
+		return errors.New("can't campile 0 instructions")
+	}
+
+	for pc, insn := range insns {
+		// Assemble does some input validation
+		_, err := insn.Assemble()
+		if err != nil {
+			return errors.Errorf("can't assemble insnstruction %d: %v", pc, insn)
+		}
+
+		switch insn.(type) {
+		case bpf.LoadExtension, bpf.RawInstruction:
+			return errors.Errorf("unsupported instruction %d: %v", pc, insn)
+		}
+	}
+
+	return nil
 }
 
 func toInstructions(insns []bpf.Instruction) []instruction {
