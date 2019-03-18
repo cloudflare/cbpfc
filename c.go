@@ -2,6 +2,7 @@ package cbpfc
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -61,6 +62,8 @@ var condToCFmt = map[bpf.JumpTest]string{
 	bpf.JumpBitsNotSet:     "!(a & %v)",
 }
 
+var funcNameRegex = regexp.MustCompile(`^[A-Za-z_][0-9A-Za-z_]*$`)
+
 // cBLock is a block of compiled C
 type cBlock struct {
 	*block
@@ -68,19 +71,29 @@ type cBlock struct {
 	Statements []string
 }
 
-// ToC compiles a cBPF program to a C function, named "funcName", with a signature of:
+type COpts struct {
+	// functionName is the symbol to use as the generated C function. Must match regex:
+	//     [A-Za-z_][0-9A-Za-z_]*
+	FunctionName string
+}
+
+// ToC compiles a cBPF program to a C function with a signature of:
 //
-//     bool funcName(const uint8_t *const data, const uint8_t *const data_end)
+//     bool opts.functionName(const uint8_t *const data, const uint8_t *const data_end)
 //
-// The function returns true IFF the packet in "data" matches the cBPF program (cBPF program returns != 0).
-func ToC(insns []bpf.Instruction, funcName string) (string, error) {
+// The function returns true IFF the packet pointed to by data matches the cBPF program (cBPF program returns != 0).
+func ToC(insns []bpf.Instruction, opts COpts) (string, error) {
+	if !funcNameRegex.MatchString(opts.FunctionName) {
+		return "", errors.Errorf("invalid FunctioName %s", opts.FunctionName)
+	}
+
 	blocks, err := compile(insns)
 	if err != nil {
 		return "", err
 	}
 
 	fun := cFunction{
-		Name:   funcName,
+		Name:   opts.FunctionName,
 		Blocks: make([]cBlock, len(blocks)),
 	}
 

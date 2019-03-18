@@ -2,37 +2,16 @@
 // (extended BPF, not be confused with cBPF extensions) compiler.
 //
 // cbpfc can compile cBPF to:
-// - C, which can be compiled to eBPF with Clang
-// - eBPF
+//   - C, which can be compiled to eBPF with Clang
+//   - eBPF
 //
-// Both the C and eBPF output are intended to pass the kernel verifier.
+// Both the C and eBPF output are intended to be accepted by the kernel verifier:
+//   - All packet loads are guarded with runtime packet length checks
+//   - RegA, RegX and M[] are zero initialized as required
+//   - Division by zero is guarded by runtime checks
 //
-// The cBPF is split into an ordered list of blocks.
-// A block contains a linear flow on instructions:
-//   - Nothing jumps into the middle of a block
-//   - Nothing jumps out of the middle of a block
-//
-// A block may start or end with any instruction, as any instruction
-// can be the target of a jump.
-//
-// A block also knows what blocks it jumps to. This forms a DAG of blocks.
-//
-// The blocks are preserved in the order they are found as this guarantees that
-// a block only targets later blocks (cBPF jumps are positive, relative offsets).
-// This also mimics the layout of the original cBPF, which is good for debugging.
-//
-// Every instruction is converted to a single statement.
-// Every packet load must be preceeded by a "guard" checking the bounds
-// the packet pointer. These are required by the eBPF verifier.
-//
-// Traversing the DAG of blocks (by visiting the blocks a block jumps to),
-// we know all packet guards that exist at the start of a given block.
-// We can check if the block requires a longer / bigger guard than
-// the shortest / least existing guard.
-//
-// cBPF jumps are relative, these are stored in "skips".
-// These have to be converted to an absolute instruction position
-// or number, "pos".
+// The generated C / eBPF is intended to be embedded into a larger C / eBPF program.
+// Any non zero cBPF return value is considered a match.
 package cbpfc
 
 import (
@@ -55,10 +34,10 @@ var condToInverse = map[bpf.JumpTest]bpf.JumpTest{
 	bpf.JumpBitsNotSet:     bpf.JumpBitsSet,
 }
 
-// Absolute position of a cBPF instruction
+// pos stores the absolute position of a cBPF instruction
 type pos uint
 
-// Relative position of a cBPF instruction
+// skips store cBPF jumps, which are relative
 type skip uint
 
 // instruction wraps a bpf instruction with it's
@@ -72,8 +51,14 @@ func (i instruction) String() string {
 	return fmt.Sprintf("%d: %v", i.id, i.Instruction)
 }
 
-// block contains a linear flow of instructions,
-// with the last instruction potentially jumping to a set of blocks
+// block contains a linear flow on instructions:
+//   - Nothing jumps into the middle of a block
+//   - Nothing jumps out of the middle of a block
+//
+// A block may start or end with any instruction, as any instruction
+// can be the target of a jump.
+//
+// A block also knows what blocks it jumps to. This forms a DAG of blocks.
 type block struct {
 	insns []instruction
 
@@ -309,7 +294,11 @@ type targetBlock struct {
 	isFallthrough bool
 }
 
-// Returns blocks in order they appear in original code
+// splitBlocks splits the cBPF into an ordered list of blocks.
+//
+// The blocks are preserved in the order they are found as this guarantees that
+// a block only targets later blocks (cBPF jumps are positive, relative offsets).
+// This also mimics the layout of the original cBPF, which is good for debugging.
 func splitBlocks(instructions []instruction) ([]*block, error) {
 	// Blocks we've visited already
 	blocks := []*block{}
@@ -437,8 +426,12 @@ func addDivideByZeroGuards(blocks []*block) error {
 	return nil
 }
 
-// addPacketGuards traverses the DAG of blocks,
-// and adds packet guards (absolute and indirect) as required.
+// addPacketGuards adds packet guards (absolute and indirect) as required.
+//
+// Traversing the DAG of blocks (by visiting the blocks a block jumps to),
+// we know all packet guards that exist at the start of a given block.
+// We can check if the block requires a longer / bigger guard than
+// the shortest / least existing guard.
 func addPacketGuards(blocks []*block) {
 	if len(blocks) == 0 {
 		return

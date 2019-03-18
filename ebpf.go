@@ -77,7 +77,9 @@ func (r EBPFOpts) stackOffset(n int) int16 {
 	return -int16(r.StackOffset + n*4)
 }
 
-// ToEBF converts cBPF instructions to eBPF
+// ToEBF converts cBPF instructions to eBPF.
+//
+// The eBPF code jumps to opts.MatchLabel if the packet pointed to by opts.PacketStart matches the cBPF program (cBPF program returns != 0).
 func ToEBPF(insns []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) {
 	blocks, err := compile(insns)
 	if err != nil {
