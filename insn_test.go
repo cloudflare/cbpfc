@@ -580,8 +580,17 @@ func checkBackends(tb testing.TB, filter []bpf.Instruction, in []byte, res XDPAc
 	checkAction(tb, loadEBPF(tb, filter), in, res)
 }
 
-func checkAction(tb testing.TB, prog *ebpf.Program, in []byte, action XDPAction) {
+func checkAction(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte, action XDPAction) {
 	tb.Helper()
+
+	if testing.Short() {
+		tb.SkipNow()
+	}
+
+	prog, err := ebpf.NewProgram(progSpec)
+	if err != nil {
+		tb.Fatal(err)
+	}
 
 	ret, out, err := prog.Test(in)
 	if err != nil {

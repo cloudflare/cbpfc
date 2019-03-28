@@ -90,9 +90,9 @@ type testTemplateOpts struct {
 	FilterName string
 }
 
-// loadC compiles classic BPF to C, which is compiled with clang, and loaded in the kernel
+// loadC compiles classic BPF to C, which is compiled with clang
 // XDPDrop on match, XDPPass otherwise
-func loadC(tb testing.TB, insns []bpf.Instruction) *ebpf.Program {
+func loadC(tb testing.TB, insns []bpf.Instruction) *ebpf.ProgramSpec {
 	tb.Helper()
 
 	// generate C
@@ -131,11 +131,5 @@ func loadC(tb testing.TB, insns []bpf.Instruction) *ebpf.Program {
 		tb.Fatal(err)
 	}
 
-	collection, err := ebpf.NewCollection(spec)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	defer collection.Close()
-
-	return collection.DetachProgram(entryPoint)
+	return spec.Programs[entryPoint]
 }
