@@ -8,9 +8,9 @@ import (
 	"golang.org/x/net/bpf"
 )
 
-// loadEBPF compiles classic BPF to eBPF, and loads it in the kernel
+// loadEBPF compiles classic BPF to eBPF
 // XDPDrop on match, XDPPass otherwise
-func loadEBPF(tb testing.TB, insns []bpf.Instruction) *ebpf.Program {
+func loadEBPF(tb testing.TB, insns []bpf.Instruction) *ebpf.ProgramSpec {
 	tb.Helper()
 
 	// Labels of blocks
@@ -68,17 +68,10 @@ func loadEBPF(tb testing.TB, insns []bpf.Instruction) *ebpf.Program {
 
 	tb.Logf("\n%v", prog)
 
-	loadedProg, err := ebpf.NewProgram(
-		&ebpf.ProgramSpec{
-			Name:         "ebpf_filter",
-			Type:         ebpf.XDP,
-			Instructions: prog,
-			License:      "BSD",
-		},
-	)
-	if err != nil {
-		tb.Fatal(err)
+	return &ebpf.ProgramSpec{
+		Name:         "ebpf_filter",
+		Type:         ebpf.XDP,
+		Instructions: prog,
+		License:      "BSD",
 	}
-
-	return loadedProg
 }
