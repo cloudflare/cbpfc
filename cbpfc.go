@@ -1,7 +1,7 @@
 // Package cbpfc implements a cBPF (classic BPF) to eBPF
 // (extended BPF, not be confused with cBPF extensions) compiler.
 //
-// cbpfc can compile cBPF to:
+// cbpfc can compile cBPF filters to:
 //   - C, which can be compiled to eBPF with Clang
 //   - eBPF
 //

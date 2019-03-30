@@ -30,68 +30,91 @@ var sizeToEBPF = map[int]asm.Size{
 	4: asm.Word,
 }
 
+// EBPFOpts control how a cBPF filter is converted to eBPF
 type EBPFOpts struct {
-	// Pointer to start of packet - not modified
+	// PacketStart is a register holding a pointer to the start of the packet.
+	// Not modified.
 	PacketStart asm.Register
-	// Pointer to end of packet - not modified
+	// PacketEnd is a register holding a pointer to the end of the packet.
+	// Not modified.
 	PacketEnd asm.Register
 
-	// Registers mapping directly to cBPF
-	RegA asm.Register
-	RegX asm.Register
-	// Temp / scratch register
-	RegTmp asm.Register
-	// Register for indirect packet loads
-	// Allows the range of a packet guard to be preserved across multiple loads by the verifier
-	RegIndirect asm.Register
+	// Working are registers used internally.
+	// Caller saved.
+	Working [4]asm.Register
 
-	// First stack offset we can use
+	// StackOffset is the first stack offset that can be used.
 	StackOffset int
 
-	// Label to jump to when packet matches
+	// MatchLabel is the label to jump to if the packet matches the filter.
 	MatchLabel string
 
-	// Label to jump to when packet doesn't match
+	// NoMatchLabel is the label to jump to if the packet doesn't match the filter.
 	NoMatchLabel string
 
-	// Prefix to prepend to generated labels
+	// LabelPrefix is the prefix to prepend to labels used internally.
 	LabelPrefix string
 }
 
-func (r EBPFOpts) reg(reg bpf.Register) asm.Register {
+// ebpfOpts is the internal version of EBPFOpts
+type ebpfOpts struct {
+	EBPFOpts
+
+	// Registers mapping directly to cBPF
+	regA asm.Register
+	regX asm.Register
+
+	// Temp / scratch register
+	regTmp asm.Register
+
+	// Register for indirect packet loads
+	// Allows the range of a packet guard to be preserved across multiple loads by the verifier
+	regIndirect asm.Register
+}
+
+func (e ebpfOpts) reg(reg bpf.Register) asm.Register {
 	switch reg {
 	case bpf.RegA:
-		return r.RegA
+		return e.regA
 	case bpf.RegX:
-		return r.RegX
+		return e.regX
 	default:
 		panic("unknown bpf register")
 	}
 }
 
-func (r EBPFOpts) label(name string) string {
-	return fmt.Sprintf("%s_%s", r.LabelPrefix, name)
+func (e ebpfOpts) label(name string) string {
+	return fmt.Sprintf("%s_%s", e.LabelPrefix, name)
 }
 
-func (r EBPFOpts) stackOffset(n int) int16 {
-	return -int16(r.StackOffset + n*4)
+func (e ebpfOpts) stackOffset(n int) int16 {
+	return -int16(e.StackOffset + n*4)
 }
 
-// ToEBF converts cBPF instructions to eBPF.
+// ToEBF converts a cBPF filter to eBPF.
 //
-// The eBPF code jumps to opts.MatchLabel if the packet pointed to by opts.PacketStart matches the cBPF program (cBPF program returns != 0).
-func ToEBPF(insns []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) {
-	blocks, err := compile(insns)
+// The generated eBPF code jumps to opts.MatchLabel if the packet pointed to by opts.PacketStart matches the cBPF filter (cBPF filter returns != 0),
+// otherwise it jumps to opts.NoMatchLabel.
+func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) {
+	blocks, err := compile(filter)
 	if err != nil {
 		return nil, err
 	}
 
-	err = checkRegs(opts.PacketStart, opts.PacketEnd, opts.RegA, opts.RegX, opts.RegTmp, opts.RegIndirect)
+	eOpts := ebpfOpts{
+		EBPFOpts:    opts,
+		regA:        opts.Working[0],
+		regX:        opts.Working[1],
+		regTmp:      opts.Working[2],
+		regIndirect: opts.Working[3],
+	}
+
+	err = checkRegs(eOpts.PacketStart, eOpts.PacketEnd, eOpts.regA, eOpts.regX, eOpts.regTmp, eOpts.regIndirect)
 	if err != nil {
 		return nil, err
 	}
 
-	if opts.StackOffset&1 == 1 {
+	if eOpts.StackOffset&1 == 1 {
 		return nil, errors.Errorf("unaligned stack offset")
 	}
 
@@ -99,14 +122,14 @@ func ToEBPF(insns []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) {
 
 	for _, block := range blocks {
 		for i, insn := range block.insns {
-			eInsn, err := insnToEBPF(insn, block, opts)
+			eInsn, err := insnToEBPF(insn, block, eOpts)
 			if err != nil {
 				return nil, errors.Wrapf(err, "unable to compile %v", insn)
 			}
 
 			// First insn of the block, add symbol so it can be referenced in jumps
 			if block.IsTarget && i == 0 {
-				eInsn[0].Symbol = opts.label(block.Label())
+				eInsn[0].Symbol = eOpts.label(block.Label())
 			}
 
 			eInsns = append(eInsns, eInsn...)
@@ -135,7 +158,7 @@ func checkRegs(regs ...asm.Register) error {
 }
 
 // insnToEBPF compiles an instruction to a set of eBPF instructions
-func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, error) {
+func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, error) {
 	switch i := insn.Instruction.(type) {
 
 	case bpf.LoadConstant:
@@ -147,17 +170,17 @@ func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, 
 			return nil, errors.Errorf("LoadAbsolute offset %v too large", i.Off)
 		}
 
-		return appendNtoh(opts.RegA, sizeToEBPF[i.Size],
-			asm.LoadMem(opts.RegA, opts.PacketStart, int16(i.Off), sizeToEBPF[i.Size]),
+		return appendNtoh(opts.regA, sizeToEBPF[i.Size],
+			asm.LoadMem(opts.regA, opts.PacketStart, int16(i.Off), sizeToEBPF[i.Size]),
 		)
 	case bpf.LoadIndirect:
 		if i.Off > math.MaxInt16 {
 			return nil, errors.Errorf("LoadIndirect offset %v too large", i.Off)
 		}
 
-		return appendNtoh(opts.RegA, sizeToEBPF[i.Size],
-			// last packet guard set opts.RegIndirect to packetstart + x
-			asm.LoadMem(opts.RegA, opts.RegIndirect, int16(i.Off), sizeToEBPF[i.Size]),
+		return appendNtoh(opts.regA, sizeToEBPF[i.Size],
+			// last packet guard set opts.regIndirect to packetstart + x
+			asm.LoadMem(opts.regA, opts.regIndirect, int16(i.Off), sizeToEBPF[i.Size]),
 		)
 	case bpf.LoadMemShift:
 		if i.Off > math.MaxInt16 {
@@ -165,20 +188,20 @@ func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, 
 		}
 
 		return ebpfInsn(
-			asm.LoadMem(opts.RegX, opts.PacketStart, int16(i.Off), asm.Byte),
-			asm.And.Imm32(opts.RegX, 0xF), // clear upper 4 bits
-			asm.LSh.Imm32(opts.RegX, 2),   // 32bit words to bytes
+			asm.LoadMem(opts.regX, opts.PacketStart, int16(i.Off), asm.Byte),
+			asm.And.Imm32(opts.regX, 0xF), // clear upper 4 bits
+			asm.LSh.Imm32(opts.regX, 2),   // 32bit words to bytes
 		)
 
 	case bpf.StoreScratch:
 		return ebpfInsn(asm.StoreMem(asm.R10, opts.stackOffset(i.N), opts.reg(i.Src), asm.Word))
 
 	case bpf.ALUOpConstant:
-		return ebpfInsn(aluToEBPF[i.Op].Imm32(opts.RegA, int32(i.Val)))
+		return ebpfInsn(aluToEBPF[i.Op].Imm32(opts.regA, int32(i.Val)))
 	case bpf.ALUOpX:
-		return ebpfInsn(aluToEBPF[i.Op].Reg32(opts.RegA, opts.RegX))
+		return ebpfInsn(aluToEBPF[i.Op].Reg32(opts.regA, opts.regX))
 	case bpf.NegateA:
-		return ebpfInsn(asm.Neg.Imm32(opts.RegA, 0))
+		return ebpfInsn(asm.Neg.Imm32(opts.regA, 0))
 
 	case bpf.Jump:
 		return ebpfInsn(asm.Ja.Label(opts.label(blk.skipToBlock(skip(i.Skip)).Label())))
@@ -187,22 +210,22 @@ func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, 
 			// eBPF immediates are signed, zero extend into temp register
 			if int32(i.Val) < 0 {
 				return asm.Instructions{
-					asm.Mov.Imm32(opts.RegTmp, int32(i.Val)),
-					jo.Reg(opts.RegA, opts.RegTmp, label),
+					asm.Mov.Imm32(opts.regTmp, int32(i.Val)),
+					jo.Reg(opts.regA, opts.regTmp, label),
 				}
 			}
 
-			return asm.Instructions{jo.Imm(opts.RegA, int32(i.Val), label)}
+			return asm.Instructions{jo.Imm(opts.regA, int32(i.Val), label)}
 		})
 	case bpf.JumpIfX:
 		return condToEBPF(opts, skip(i.SkipTrue), skip(i.SkipFalse), blk, i.Cond, func(jo asm.JumpOp, label string) asm.Instructions {
-			return asm.Instructions{jo.Reg(opts.RegA, opts.RegX, label)}
+			return asm.Instructions{jo.Reg(opts.regA, opts.regX, label)}
 		})
 
 	case bpf.RetA:
 		// a == 0 -> no match
 		return ebpfInsn(
-			asm.JEq.Imm(opts.RegA, 0, opts.NoMatchLabel),
+			asm.JEq.Imm(opts.regA, 0, opts.NoMatchLabel),
 			asm.Ja.Label(opts.MatchLabel),
 		)
 	case bpf.RetConstant:
@@ -213,32 +236,32 @@ func insnToEBPF(insn instruction, blk *block, opts EBPFOpts) (asm.Instructions, 
 		}
 
 	case bpf.TXA:
-		return ebpfInsn(asm.Mov.Reg32(opts.RegA, opts.RegX))
+		return ebpfInsn(asm.Mov.Reg32(opts.regA, opts.regX))
 	case bpf.TAX:
-		return ebpfInsn(asm.Mov.Reg32(opts.RegX, opts.RegA))
+		return ebpfInsn(asm.Mov.Reg32(opts.regX, opts.regA))
 
 	case packetGuardAbsolute:
 		return ebpfInsn(
-			asm.Mov.Reg(opts.RegTmp, opts.PacketStart),
-			asm.Add.Imm(opts.RegTmp, int32(i.Len)),
-			asm.JGT.Reg(opts.RegTmp, opts.PacketEnd, opts.NoMatchLabel),
+			asm.Mov.Reg(opts.regTmp, opts.PacketStart),
+			asm.Add.Imm(opts.regTmp, int32(i.Len)),
+			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.NoMatchLabel),
 		)
 	case packetGuardIndirect:
 		return ebpfInsn(
 			// packet start + x
-			asm.Mov.Reg(opts.RegIndirect, opts.PacketStart),
-			asm.Add.Reg(opts.RegIndirect, opts.RegX),
-			// different reg (so actual load picks offset), but same verifier context
-			asm.Mov.Reg(opts.RegTmp, opts.RegIndirect),
-			asm.Add.Imm(opts.RegTmp, int32(i.Len)),
-			asm.JGT.Reg(opts.RegTmp, opts.PacketEnd, opts.NoMatchLabel),
+			asm.Mov.Reg(opts.regIndirect, opts.PacketStart),
+			asm.Add.Reg(opts.regIndirect, opts.regX),
+			// different reg (so actual load picks offset), but same verifier context id
+			asm.Mov.Reg(opts.regTmp, opts.regIndirect),
+			asm.Add.Imm(opts.regTmp, int32(i.Len)),
+			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.NoMatchLabel),
 		)
 
 	case initializeScratch:
 		return ebpfInsn(asm.StoreImm(asm.R10, opts.stackOffset(i.N), 0, asm.Word))
 
 	case checkXNotZero:
-		return ebpfInsn(asm.JEq.Imm(opts.RegX, 0, opts.NoMatchLabel))
+		return ebpfInsn(asm.JEq.Imm(opts.regX, 0, opts.NoMatchLabel))
 
 	default:
 		return nil, errors.Errorf("unsupported instruction %v", insn)
@@ -254,7 +277,7 @@ func appendNtoh(reg asm.Register, size asm.Size, insns ...asm.Instruction) (asm.
 	return append(insns, asm.HostTo(asm.BE, reg, size)), nil
 }
 
-func condToEBPF(opts EBPFOpts, skipTrue, skipFalse skip, blk *block, cond bpf.JumpTest, insn func(jo asm.JumpOp, label string) asm.Instructions) (asm.Instructions, error) {
+func condToEBPF(opts ebpfOpts, skipTrue, skipFalse skip, blk *block, cond bpf.JumpTest, insn func(jo asm.JumpOp, label string) asm.Instructions) (asm.Instructions, error) {
 	var condToJump = map[bpf.JumpTest]asm.JumpOp{
 		bpf.JumpEqual:          asm.JEq,
 		bpf.JumpNotEqual:       asm.JNE,
