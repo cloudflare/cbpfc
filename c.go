@@ -13,7 +13,7 @@ import (
 const funcTemplate = `
 // True if packet matches, false otherwise
 static inline
-bool {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
+uint32_t {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
 	__attribute__((unused))
 	uint32_t a, x, m[16];
 
@@ -79,9 +79,11 @@ type COpts struct {
 
 // ToC compiles a cBPF filter to a C function with a signature of:
 //
-//     bool opts.FunctionName(const uint8_t *const data, const uint8_t *const data_end)
+//     uint32_t opts.FunctionName(const uint8_t *const data, const uint8_t *const data_end)
 //
-// The function returns true IFF the packet pointed to by data matches the cBPF filter (cBPF filter returns != 0).
+// The function returns the filter's return value:
+// 0 if the packet does not match the cBPF filter,
+// non 0 if the packet does match.
 func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 	if !funcNameRegex.MatchString(opts.FunctionName) {
 		return "", errors.Errorf("invalid FunctioName %s", opts.FunctionName)
@@ -171,16 +173,10 @@ func insnToC(insn instruction, blk *block) (string, error) {
 	case bpf.JumpIfX:
 		return condToC(skip(i.SkipTrue), skip(i.SkipFalse), blk, condToCFmt[i.Cond], "x")
 
-	// From man iptables-extensions, non-zero is match (which they call "pass" in their example because the iptables
-	// action is "ACCEPT", but gatesetter uses iptable rules with "DROP")
 	case bpf.RetA:
-		return stat("return a != 0;")
+		return stat("return a;")
 	case bpf.RetConstant:
-		if i.Val == 0 {
-			return stat("return false;")
-		} else {
-			return stat("return true;")
-		}
+		return stat("return %d;", i.Val)
 
 	case bpf.TXA:
 		return stat("a = x;")
@@ -188,15 +184,15 @@ func insnToC(insn instruction, blk *block) (string, error) {
 		return stat("x = a;")
 
 	case packetGuardAbsolute:
-		return stat("if (data + %d > data_end) return false;", i.Len)
+		return stat("if (data + %d > data_end) return 0;", i.Len)
 	case packetGuardIndirect:
-		return stat("if (data + x + %d > data_end) return false;", i.Len)
+		return stat("if (data + x + %d > data_end) return 0;", i.Len)
 
 	case initializeScratch:
 		return stat("m[%d] = 0;", i.N)
 
 	case checkXNotZero:
-		return stat("if (x == 0) return false;")
+		return stat("if (x == 0) return 0;")
 
 	default:
 		return "", errors.Errorf("unsupported instruction %v", insn)

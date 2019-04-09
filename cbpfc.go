@@ -11,7 +11,6 @@
 //   - Division by zero is guarded by runtime checks
 //
 // The generated C / eBPF is intended to be embedded into a larger C / eBPF program.
-// Any non zero cBPF return value is considered a match.
 package cbpfc
 
 import (

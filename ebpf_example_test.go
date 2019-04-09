@@ -32,11 +32,12 @@ func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
 		// Pass packet start and end pointers in these registers
 		PacketStart: asm.R2,
 		PacketEnd:   asm.R3,
+		// Result of filter
+		Result:      asm.R4,
+		ResultLabel: "result",
 		// Registers used by generated code
-		Working:      [4]asm.Register{asm.R4, asm.R5, asm.R6, asm.R7},
-		LabelPrefix:  "filter",
-		MatchLabel:   "drop",
-		NoMatchLabel: "pass",
+		Working:     [4]asm.Register{asm.R4, asm.R5, asm.R6, asm.R7},
+		LabelPrefix: "filter",
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "converting filter to eBPF")
@@ -56,24 +57,12 @@ func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
 
 	prog = append(prog, ebpfFilter...)
 
-	// kernel verifier does not like dead code - only include exit blocks if the prog refers to them
-	refs := prog.ReferenceOffsets()
-
-	// Packet matches, drop it
-	if _, ok := refs["drop"]; ok {
-		prog = append(prog,
-			asm.Mov.Imm(asm.R0, 1).Sym("drop"), // XDP_DROP
-			asm.Return(),
-		)
-	}
-
-	// Packet doesn't match, pass it
-	if _, ok := refs["pass"]; ok {
-		prog = append(prog,
-			asm.Mov.Imm(asm.R0, 2).Sym("pass"), // XDP_PASS
-			asm.Return(),
-		)
-	}
+	prog = append(prog,
+		asm.Mov.Imm(asm.R0, 2).Sym("result"), // XDP_PASS
+		asm.JEq.Imm(asm.R4, 0, "return"),
+		asm.Mov.Imm(asm.R0, 1), // XDP_DROP
+		asm.Return().Sym("return"),
+	)
 
 	return prog, nil
 }
