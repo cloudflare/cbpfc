@@ -9,6 +9,9 @@ import (
 	"golang.org/x/net/bpf"
 )
 
+// internal label when packet doesn't match
+const noMatchLabel = "nomatch"
+
 // alu operation to eBPF
 var aluToEBPF = map[bpf.ALUOp]asm.ALUOp{
 	bpf.ALUOpAdd:        asm.Add,
@@ -38,19 +41,19 @@ type EBPFOpts struct {
 	// PacketEnd is a register holding a pointer to the end of the packet.
 	// Not modified.
 	PacketEnd asm.Register
+	// Register to output the filter return value in.
+	Result asm.Register
+
+	// Label to jump to with the result of the filter in register Result.
+	ResultLabel string
 
 	// Working are registers used internally.
 	// Caller saved.
+	// Must be different to PacketStart and PacketEnd, but Result can be reused.
 	Working [4]asm.Register
 
 	// StackOffset is the first stack offset that can be used.
 	StackOffset int
-
-	// MatchLabel is the label to jump to if the packet matches the filter.
-	MatchLabel string
-
-	// NoMatchLabel is the label to jump to if the packet doesn't match the filter.
-	NoMatchLabel string
 
 	// LabelPrefix is the prefix to prepend to labels used internally.
 	LabelPrefix string
@@ -93,9 +96,10 @@ func (e ebpfOpts) stackOffset(n int) int16 {
 
 // ToEBF converts a cBPF filter to eBPF.
 //
-// The generated eBPF code jumps to opts.MatchLabel if the packet pointed to by opts.PacketStart matches the cBPF filter (cBPF filter returns != 0),
-// otherwise it jumps to opts.NoMatchLabel.
-func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) {
+// The generated eBPF code always jumps to opts.ResultLabel, with register opts.Result containing the filter's return value:
+// 0 if the packet does not match the cBPF filter,
+// non 0 if the packet does match.
+func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) (asm.Instructions, error) {
 	blocks, err := compile(filter)
 	if err != nil {
 		return nil, err
@@ -109,7 +113,13 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) 
 		regIndirect: opts.Working[3],
 	}
 
-	err = checkRegs(eOpts.PacketStart, eOpts.PacketEnd, eOpts.regA, eOpts.regX, eOpts.regTmp, eOpts.regIndirect)
+	// opts.Result does not have to be unique
+	err = registersUnique(eOpts.PacketStart, eOpts.PacketEnd, eOpts.regA, eOpts.regX, eOpts.regTmp, eOpts.regIndirect)
+	if err != nil {
+		return nil, err
+	}
+
+	err = registerValid(eOpts.Result)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +128,7 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) 
 		return nil, errors.Errorf("unaligned stack offset")
 	}
 
-	eInsns := []asm.Instruction{}
+	eInsns := asm.Instructions{}
 
 	for _, block := range blocks {
 		for i, insn := range block.insns {
@@ -136,22 +146,39 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) ([]asm.Instruction, error) 
 		}
 	}
 
+	// kernel verifier does not like dead code - only include no match block if we used it
+	if _, ok := eInsns.ReferenceOffsets()[eOpts.label(noMatchLabel)]; ok {
+		eInsns = append(eInsns,
+			asm.Mov.Imm(eOpts.Result, 0).Sym(eOpts.label(noMatchLabel)),
+			asm.Ja.Label(opts.ResultLabel),
+		)
+	}
+
 	return eInsns, nil
 }
 
-// checkRegs ensures the registers are valid and unique
-func checkRegs(regs ...asm.Register) error {
+// registersUnique ensures the registers are valid and unique
+func registersUnique(regs ...asm.Register) error {
 	seen := make(map[asm.Register]struct{}, len(regs))
 
-	for _, r := range regs {
-		if r > asm.R9 {
-			return errors.Errorf("invalid register %v", r)
+	for _, reg := range regs {
+		if err := registerValid(reg); err != nil {
+			return err
 		}
 
-		if _, ok := seen[r]; ok {
-			return errors.Errorf("register %v used twice", r)
+		if _, ok := seen[reg]; ok {
+			return errors.Errorf("register %v used twice", reg)
 		}
-		seen[r] = struct{}{}
+		seen[reg] = struct{}{}
+	}
+
+	return nil
+}
+
+// registerValid ensures that a register is a valid ebpf register
+func registerValid(reg asm.Register) error {
+	if reg > asm.R9 {
+		return errors.Errorf("invalid register %v", reg)
 	}
 
 	return nil
@@ -223,17 +250,15 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		})
 
 	case bpf.RetA:
-		// a == 0 -> no match
 		return ebpfInsn(
-			asm.JEq.Imm(opts.regA, 0, opts.NoMatchLabel),
-			asm.Ja.Label(opts.MatchLabel),
+			asm.Mov.Reg32(opts.Result, opts.regA),
+			asm.Ja.Label(opts.ResultLabel),
 		)
 	case bpf.RetConstant:
-		if i.Val == 0 {
-			return ebpfInsn(asm.Ja.Label(opts.NoMatchLabel))
-		} else {
-			return ebpfInsn(asm.Ja.Label(opts.MatchLabel))
-		}
+		return ebpfInsn(
+			asm.Mov.Imm32(opts.Result, int32(i.Val)),
+			asm.Ja.Label(opts.ResultLabel),
+		)
 
 	case bpf.TXA:
 		return ebpfInsn(asm.Mov.Reg32(opts.regA, opts.regX))
@@ -244,7 +269,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		return ebpfInsn(
 			asm.Mov.Reg(opts.regTmp, opts.PacketStart),
 			asm.Add.Imm(opts.regTmp, int32(i.Len)),
-			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.NoMatchLabel),
+			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.label(noMatchLabel)),
 		)
 	case packetGuardIndirect:
 		return ebpfInsn(
@@ -254,14 +279,14 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 			// different reg (so actual load picks offset), but same verifier context id
 			asm.Mov.Reg(opts.regTmp, opts.regIndirect),
 			asm.Add.Imm(opts.regTmp, int32(i.Len)),
-			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.NoMatchLabel),
+			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.label(noMatchLabel)),
 		)
 
 	case initializeScratch:
 		return ebpfInsn(asm.StoreImm(asm.R10, opts.stackOffset(i.N), 0, asm.Word))
 
 	case checkXNotZero:
-		return ebpfInsn(asm.JEq.Imm(opts.regX, 0, opts.NoMatchLabel))
+		return ebpfInsn(asm.JEq.Imm(opts.regX, 0, opts.label(noMatchLabel)))
 
 	default:
 		return nil, errors.Errorf("unsupported instruction %v", insn)
