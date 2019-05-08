@@ -1,0 +1,16 @@
+language: go
+dist: xenial
+
+env:
+  - GO111MODULE=on CLANG=/usr/bin/clang-6.0
+
+addons:
+  apt:
+    packages:
+      - clang-6.0
+
+script:
+  # gofmt doesn't report any changes
+  - test -z $(gofmt -l ./ | tee /dev/stderr)
+  # tests need to run as root to load XDP programs
+  - sudo -E env "PATH=$PATH" go test ./...
