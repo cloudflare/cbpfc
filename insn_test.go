@@ -3,10 +3,13 @@ package cbpfc
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/newtools/ebpf"
 	"golang.org/x/net/bpf"
+	// syscall has a wonky RLIM_INFINITY, and no RLIMIT_MEMLOCK
+	"golang.org/x/sys/unix"
 )
 
 type XDPAction int
@@ -32,6 +35,19 @@ const (
 	XDPPass
 	XDPTx
 )
+
+func TestMain(m *testing.M) {
+	// Remove any locked memory limits so we can load BPF programs
+	err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
+		Cur: unix.RLIM_INFINITY,
+		Max: unix.RLIM_INFINITY,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
 
 func TestZeroInitA(t *testing.T) {
 	t.Parallel()
