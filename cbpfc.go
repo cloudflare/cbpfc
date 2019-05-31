@@ -59,6 +59,7 @@ func (i instruction) String() string {
 //
 // A block also knows what blocks it jumps to. This forms a DAG of blocks.
 type block struct {
+	// Should not be directly modified, instead copy instructions to new slice
 	insns []instruction
 
 	// Map of absolute instruction positions the last instruction
@@ -76,12 +77,8 @@ type block struct {
 
 // newBlock creates a block with copy of insns
 func newBlock(insns []instruction) *block {
-	// Copy the insns so blocks can be modified independently
-	blockInsns := make([]instruction, len(insns))
-	copy(blockInsns, insns)
-
 	return &block{
-		insns: blockInsns,
+		insns: insns,
 		jumps: make(map[pos]*block),
 		id:    insns[0].id,
 	}
@@ -98,10 +95,6 @@ func (b *block) skipToPos(s skip) pos {
 // Get the target block of a skip
 func (b *block) skipToBlock(s skip) *block {
 	return b.jumps[b.skipToPos(s)]
-}
-
-func (b *block) insert(pos int, insn instruction) {
-	b.insns = append(b.insns[:pos], append([]instruction{insn}, b.insns[pos:]...)...)
 }
 
 func (b *block) last() instruction {
@@ -389,9 +382,9 @@ func addDivideByZeroGuards(blocks []*block) error {
 	for _, block := range blocks {
 		notZero := xNotZero[block]
 
-		for pc := 0; pc < len(block.insns); pc++ {
-			insn := block.insns[pc]
-
+		// newInsns to replace those in the block
+		newInsns := []instruction{}
+		for _, insn := range block.insns {
 			switch i := insn.Instruction.(type) {
 			case bpf.ALUOpConstant:
 				if isDivision(i.Op) && i.Val == 0 {
@@ -399,17 +392,19 @@ func addDivideByZeroGuards(blocks []*block) error {
 				}
 			case bpf.ALUOpX:
 				if isDivision(i.Op) && !notZero {
-					block.insert(pc, instruction{Instruction: checkXNotZero{}})
-					pc++
+					newInsns = append(newInsns, instruction{Instruction: checkXNotZero{}})
 					notZero = true
 				}
 			}
+
+			newInsns = append(newInsns, insn)
 
 			// check if X clobbered - check is invalidated
 			if memWrites(insn.Instruction).regs[bpf.RegX] {
 				notZero = false
 			}
 		}
+		block.insns = newInsns
 
 		// update the status of every block this one jumps to
 		for _, target := range block.jumps {
@@ -523,6 +518,9 @@ func addPacketGuards(blocks []*block, opts packetGuardOpts) {
 
 // addBlockGuards add the guards required for the instructions in block.
 func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts) packetGuard {
+	// block insns with guards added
+	newInsns := []instruction{}
+
 	// Start of the current pseudo block in case guard is reset / invalidated
 	start := 0
 
@@ -550,13 +548,15 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 			}
 
 			currentGuard = insnsGuard
-			block.insert(start, instruction{Instruction: opts.createInsn(insnsGuard)})
-			// Skip over the extra instruction we've just addedd
-			start++
+
+			newInsns = append(newInsns, instruction{Instruction: opts.createInsn(insnsGuard)})
 		}
 
+		newInsns = append(newInsns, block.insns[start:start+insnsCovered]...)
 		start += insnsCovered
 	}
+
+	block.insns = newInsns
 
 	return currentGuard
 }
@@ -696,12 +696,14 @@ func initializeMemory(blocks []*block) {
 		}
 	}
 
+	// new instructions we need to prepend to intialize unitialized registers
+	initInsns := []instruction{}
 	for reg, uninit := range uninitialized.regs {
 		if !uninit {
 			continue
 		}
 
-		blocks[0].insert(0, instruction{
+		initInsns = append(initInsns, instruction{
 			Instruction: bpf.LoadConstant{
 				Dst: bpf.Register(reg),
 				Val: 0,
@@ -714,12 +716,13 @@ func initializeMemory(blocks []*block) {
 			continue
 		}
 
-		blocks[0].insert(0, instruction{
+		initInsns = append(initInsns, instruction{
 			Instruction: initializeScratch{
 				N: scratch,
 			},
 		})
 	}
+	blocks[0].insns = append(initInsns, blocks[0].insns...)
 }
 
 // memUninitializedReads returns the memory read by insn that has not yet been initialized according to initialized.
