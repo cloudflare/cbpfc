@@ -205,9 +205,17 @@ func validateInstructions(insns []bpf.Instruction) error {
 			return errors.Errorf("can't assemble insnstruction %d: %v", pc, insn)
 		}
 
-		switch insn.(type) {
-		case bpf.LoadExtension, bpf.RawInstruction:
+		switch i := insn.(type) {
+		case bpf.RawInstruction:
 			return errors.Errorf("unsupported instruction %d: %v", pc, insn)
+
+		case bpf.LoadExtension:
+			switch i.Num {
+			case bpf.ExtLen:
+				break
+			default:
+				return errors.Errorf("unsupported BPF extension %d: %v", pc, insn)
+			}
 		}
 	}
 
@@ -783,6 +791,8 @@ func memWrites(insn bpf.Instruction) memStatus {
 		write.regs[bpf.RegA] = true
 	case bpf.LoadConstant:
 		write.regs[i.Dst] = true
+	case bpf.LoadExtension:
+		write.regs[bpf.RegA] = true
 	case bpf.LoadIndirect:
 		write.regs[bpf.RegA] = true
 	case bpf.LoadMemShift:

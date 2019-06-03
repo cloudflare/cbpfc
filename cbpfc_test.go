@@ -27,12 +27,25 @@ func TestRaw(t *testing.T) {
 }
 
 func TestExtension(t *testing.T) {
-	_, err := compile([]bpf.Instruction{
-		bpf.LoadExtension{},
-	})
+	// No extensions > 256 right now
+	for i := 0; i < 256; i++ {
+		ext := bpf.Extension(i)
 
-	if err == nil {
-		t.Fatal("load extension accepted", err)
+		_, err := compile([]bpf.Instruction{
+			bpf.LoadExtension{Num: ext},
+			bpf.RetA{},
+		})
+
+		switch ext {
+		case bpf.ExtLen:
+			if err != nil {
+				t.Fatal("ExtLen not accepted", err)
+			}
+		default:
+			if err == nil {
+				t.Fatal("unsupported extension accepted")
+			}
+		}
 	}
 }
 
@@ -172,6 +185,7 @@ func TestInstructionReadsRegA(t *testing.T) {
 		bpf.LoadAbsolute{}:              false,
 		bpf.LoadConstant{Dst: bpf.RegA}: false,
 		bpf.LoadConstant{Dst: bpf.RegX}: false,
+		bpf.LoadExtension{}:             false,
 		bpf.LoadIndirect{}:              false,
 		bpf.LoadMemShift{}:              false,
 		bpf.LoadScratch{Dst: bpf.RegA}:  false,
@@ -204,6 +218,7 @@ func TestInstructionWritesRegA(t *testing.T) {
 		bpf.LoadAbsolute{}:              true,
 		bpf.LoadConstant{Dst: bpf.RegA}: true,
 		bpf.LoadConstant{Dst: bpf.RegX}: false,
+		bpf.LoadExtension{}:             true,
 		bpf.LoadIndirect{}:              true,
 		bpf.LoadMemShift{}:              false,
 		bpf.LoadScratch{Dst: bpf.RegA}:  true,
@@ -236,6 +251,7 @@ func TestInstructionReadsRegX(t *testing.T) {
 		bpf.LoadAbsolute{}:              false,
 		bpf.LoadConstant{Dst: bpf.RegA}: false,
 		bpf.LoadConstant{Dst: bpf.RegX}: false,
+		bpf.LoadExtension{}:             false,
 		bpf.LoadIndirect{}:              true,
 		bpf.LoadMemShift{}:              false,
 		bpf.LoadScratch{Dst: bpf.RegA}:  false,
@@ -268,6 +284,7 @@ func TestInstructionWritesRegX(t *testing.T) {
 		bpf.LoadAbsolute{}:              false,
 		bpf.LoadConstant{Dst: bpf.RegA}: false,
 		bpf.LoadConstant{Dst: bpf.RegX}: true,
+		bpf.LoadExtension{}:             false,
 		bpf.LoadIndirect{}:              false,
 		bpf.LoadMemShift{}:              true,
 		bpf.LoadScratch{Dst: bpf.RegA}:  false,
@@ -300,6 +317,7 @@ func TestInstructionReadsScratch(t *testing.T) {
 		bpf.LoadAbsolute{}:                   false,
 		bpf.LoadConstant{Dst: bpf.RegA}:      false,
 		bpf.LoadConstant{Dst: bpf.RegX}:      false,
+		bpf.LoadExtension{}:                  false,
 		bpf.LoadIndirect{}:                   false,
 		bpf.LoadMemShift{}:                   false,
 		bpf.LoadScratch{Dst: bpf.RegA, N: 3}: true,
@@ -332,6 +350,7 @@ func TestInstructionWritesScratch(t *testing.T) {
 		bpf.LoadAbsolute{}:                   false,
 		bpf.LoadConstant{Dst: bpf.RegA}:      false,
 		bpf.LoadConstant{Dst: bpf.RegX}:      false,
+		bpf.LoadExtension{}:                  false,
 		bpf.LoadIndirect{}:                   false,
 		bpf.LoadMemShift{}:                   false,
 		bpf.LoadScratch{Dst: bpf.RegA, N: 3}: false,

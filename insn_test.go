@@ -243,6 +243,21 @@ func TestMemShift(t *testing.T) {
 	checkBackends(t, filter(0), []byte{0, 0, 0xF0}, XDPDrop)
 }
 
+func TestLoadExtLen(t *testing.T) {
+	t.Parallel()
+
+	filter := func(pktLen uint32) []bpf.Instruction {
+		return []bpf.Instruction{
+			bpf.LoadExtension{Num: bpf.ExtLen},
+			bpf.JumpIf{Cond: bpf.JumpEqual, Val: pktLen, SkipTrue: 1},
+			bpf.RetConstant{Val: 0},
+			bpf.RetConstant{Val: 1},
+		}
+	}
+
+	checkBackends(t, filter(16), []byte{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef}, XDPDrop)
+}
+
 // check a OP b == res for both ALUOpConstant and ALUOpX
 func checkAlu(t *testing.T, op bpf.ALUOp, a, b, res uint32) {
 	t.Helper()
