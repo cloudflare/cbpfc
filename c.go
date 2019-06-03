@@ -159,6 +159,13 @@ func insnToC(insn instruction, blk *block) (string, error) {
 	case bpf.StoreScratch:
 		return stat("m[%d] = %s;", i.N, regToCSym[i.Src])
 
+	case bpf.LoadExtension:
+		if i.Num != bpf.ExtLen {
+			return "", errors.Errorf("unsupported BPF extension %v", i)
+		}
+
+		return stat("a = data_end - data;")
+
 	case bpf.ALUOpConstant:
 		return stat("a %s= %d;", aluToCOp[i.Op], i.Val)
 	case bpf.ALUOpX:

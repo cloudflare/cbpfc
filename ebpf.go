@@ -223,6 +223,16 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 	case bpf.StoreScratch:
 		return ebpfInsn(asm.StoreMem(asm.R10, opts.stackOffset(i.N), opts.reg(i.Src), asm.Word))
 
+	case bpf.LoadExtension:
+		if i.Num != bpf.ExtLen {
+			return nil, errors.Errorf("unsupported BPF extension %v", i)
+		}
+
+		return ebpfInsn(
+			asm.Mov.Reg(opts.regA, opts.PacketEnd),
+			asm.Sub.Reg32(opts.regA, opts.PacketStart),
+		)
+
 	case bpf.ALUOpConstant:
 		return ebpfInsn(aluToEBPF[i.Op].Imm32(opts.regA, int32(i.Val)))
 	case bpf.ALUOpX:
