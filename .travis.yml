@@ -2,12 +2,22 @@ language: go
 dist: xenial
 
 env:
-  - GO111MODULE=on CLANG=/usr/bin/clang-6.0
+  global:
+    - GO111MODULE=on
+  matrix:
+    - CLANG=/usr/bin/clang-6.0
+    - CLANG=/usr/bin/clang-7
+    - CLANG=/usr/bin/clang-8
 
 addons:
   apt:
+    sources:
+      - llvm-toolchain-xenial-7
+      - llvm-toolchain-xenial-8
     packages:
       - clang-6.0
+      - clang-7
+      - clang-8
 
 script:
   # gofmt doesn't report any changes
