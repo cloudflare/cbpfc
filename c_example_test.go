@@ -78,7 +78,7 @@ func ExampleToC() {
 	}
 
 	// ELF with a single eBPF program 'example'
-	// Can be loaded with newtools/ebpf or libbpf
+	// Can be loaded with cilium/ebpf or libbpf
 	_ = elf
 }
 
