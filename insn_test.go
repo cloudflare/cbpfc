@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/newtools/ebpf"
+	"github.com/cilium/ebpf"
 	"golang.org/x/net/bpf"
 	// syscall has a wonky RLIM_INFINITY, and no RLIMIT_MEMLOCK
 	"golang.org/x/sys/unix"

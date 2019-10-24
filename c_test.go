@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/newtools/ebpf"
+	"github.com/cilium/ebpf"
 	"golang.org/x/net/bpf"
 )
 

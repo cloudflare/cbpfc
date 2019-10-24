@@ -1,7 +1,7 @@
 package cbpfc
 
 import (
-	"github.com/newtools/ebpf/asm"
+	"github.com/cilium/ebpf/asm"
 	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
@@ -19,7 +19,7 @@ func ExampleToEBPF() {
 		panic(err)
 	}
 
-	// Prog can be loaded directly using newtools/ebpf,
+	// Prog can be loaded directly using cilium/ebpf,
 	// or converted to a '[]struct bpf_insn' for libbpf
 	_ = prog
 }

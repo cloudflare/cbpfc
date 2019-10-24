@@ -3,7 +3,7 @@ package cbpfc
 import (
 	"testing"
 
-	"github.com/newtools/ebpf"
+	"github.com/cilium/ebpf"
 	"golang.org/x/net/bpf"
 )
 

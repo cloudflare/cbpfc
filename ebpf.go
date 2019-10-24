@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/newtools/ebpf/asm"
+	"github.com/cilium/ebpf/asm"
 	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
