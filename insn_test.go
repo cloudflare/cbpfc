@@ -54,6 +54,7 @@ func TestZeroInitX(t *testing.T) {
 
 func TestZeroInitScratch(t *testing.T) {
 	t.Parallel()
+	t.Skip() // rejected by kernel
 
 	filter := []bpf.Instruction{
 		bpf.LoadScratch{Dst: bpf.RegA, N: 7},
@@ -620,6 +621,7 @@ func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected r
 
 	t.Run("C", check(cBackend))
 	t.Run("eBPF", check(ebpfBackend))
+	t.Run("kernel", check(kernelBackend))
 }
 
 type XDPAction int
