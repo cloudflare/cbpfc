@@ -2,6 +2,7 @@ package cbpfc
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"os"
 	"testing"
@@ -37,13 +38,18 @@ const (
 )
 
 func TestMain(m *testing.M) {
-	// Remove any locked memory limits so we can load BPF programs
-	err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
-		Cur: unix.RLIM_INFINITY,
-		Max: unix.RLIM_INFINITY,
-	})
-	if err != nil {
-		panic(err)
+	// Needed for testing.Short
+	flag.Parse()
+
+	if !testing.Short() {
+		// Remove any locked memory limits so we can load BPF programs
+		err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
+			Cur: unix.RLIM_INFINITY,
+			Max: unix.RLIM_INFINITY,
+		})
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	os.Exit(m.Run())
