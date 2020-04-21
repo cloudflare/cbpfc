@@ -13,30 +13,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type XDPAction int
-
-func (r XDPAction) String() string {
-	switch r {
-	case XDPAborted:
-		return "XDPAborted"
-	case XDPDrop:
-		return "XDPDrop"
-	case XDPPass:
-		return "XDPPass"
-	case XDPTx:
-		return "XDPTx"
-	default:
-		return fmt.Sprintf("XDPResult(%d)", int(r))
-	}
-}
-
-const (
-	XDPAborted XDPAction = iota
-	XDPDrop
-	XDPPass
-	XDPTx
-)
-
 func TestMain(m *testing.M) {
 	// Needed for testing.Short
 	flag.Parse()
@@ -62,7 +38,7 @@ func TestZeroInitA(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPPass)
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 func TestZeroInitX(t *testing.T) {
@@ -73,7 +49,7 @@ func TestZeroInitX(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPPass)
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 func TestZeroInitScratch(t *testing.T) {
@@ -84,7 +60,7 @@ func TestZeroInitScratch(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPPass)
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 func TestLoadConstantA(t *testing.T) {
@@ -99,9 +75,9 @@ func TestLoadConstantA(t *testing.T) {
 		}
 	}
 
-	checkBackends(t, filter(1), []byte{}, XDPDrop)
-	checkBackends(t, filter(28), []byte{}, XDPDrop)
-	checkBackends(t, filter(0), []byte{}, XDPDrop)
+	checkBackends(t, filter(1), []byte{}, match)
+	checkBackends(t, filter(28), []byte{}, match)
+	checkBackends(t, filter(0), []byte{}, match)
 }
 
 func TestLoadConstantX(t *testing.T) {
@@ -117,9 +93,9 @@ func TestLoadConstantX(t *testing.T) {
 		}
 	}
 
-	checkBackends(t, filter(1), []byte{}, XDPDrop)
-	checkBackends(t, filter(28), []byte{}, XDPDrop)
-	checkBackends(t, filter(0), []byte{}, XDPDrop)
+	checkBackends(t, filter(1), []byte{}, match)
+	checkBackends(t, filter(28), []byte{}, match)
+	checkBackends(t, filter(0), []byte{}, match)
 }
 
 func TestLoadAbsolute(t *testing.T) {
@@ -135,16 +111,16 @@ func TestLoadAbsolute(t *testing.T) {
 	}
 
 	// 1
-	checkBackends(t, filter(5, 1), []byte{0, 0, 5}, XDPDrop)
-	checkBackends(t, filter(6, 1), []byte{0, 0, 5}, XDPPass)
+	checkBackends(t, filter(5, 1), []byte{0, 0, 5}, match)
+	checkBackends(t, filter(6, 1), []byte{0, 0, 5}, noMatch)
 
 	// 2
-	checkBackends(t, filter(0xDEAD, 2), []byte{0, 0, 0xDE, 0xAD}, XDPDrop)
-	checkBackends(t, filter(0xDEAF, 2), []byte{0, 0, 0xDE, 0xAD}, XDPPass)
+	checkBackends(t, filter(0xDEAD, 2), []byte{0, 0, 0xDE, 0xAD}, match)
+	checkBackends(t, filter(0xDEAF, 2), []byte{0, 0, 0xDE, 0xAD}, noMatch)
 
 	// 4
-	checkBackends(t, filter(0xDEADBEEF, 4), []byte{0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, XDPDrop)
-	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, XDPPass)
+	checkBackends(t, filter(0xDEADBEEF, 4), []byte{0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, match)
+	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, noMatch)
 }
 
 func TestLoadIndirect(t *testing.T) {
@@ -161,16 +137,16 @@ func TestLoadIndirect(t *testing.T) {
 	}
 
 	// 1
-	checkBackends(t, filter(5, 1), []byte{0, 0, 0, 5}, XDPDrop)
-	checkBackends(t, filter(6, 1), []byte{0, 0, 0, 5}, XDPPass)
+	checkBackends(t, filter(5, 1), []byte{0, 0, 0, 5}, match)
+	checkBackends(t, filter(6, 1), []byte{0, 0, 0, 5}, noMatch)
 
 	// 2
-	checkBackends(t, filter(0xDEAD, 2), []byte{0, 0, 0, 0xDE, 0xAD}, XDPDrop)
-	checkBackends(t, filter(0xDEAF, 2), []byte{0, 0, 0, 0xDE, 0xAD}, XDPPass)
+	checkBackends(t, filter(0xDEAD, 2), []byte{0, 0, 0, 0xDE, 0xAD}, match)
+	checkBackends(t, filter(0xDEAF, 2), []byte{0, 0, 0, 0xDE, 0xAD}, noMatch)
 
 	// 4
-	checkBackends(t, filter(0xDEADBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, XDPDrop)
-	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, XDPPass)
+	checkBackends(t, filter(0xDEADBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, match)
+	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, noMatch)
 }
 
 func TestScratchA(t *testing.T) {
@@ -198,8 +174,8 @@ func TestScratchA(t *testing.T) {
 		}
 	}
 
-	checkBackends(t, filter(0xdeadbeef), []byte{}, XDPDrop)
-	checkBackends(t, filter(0), []byte{}, XDPDrop)
+	checkBackends(t, filter(0xdeadbeef), []byte{}, match)
+	checkBackends(t, filter(0), []byte{}, match)
 }
 
 func TestScratchX(t *testing.T) {
@@ -228,8 +204,8 @@ func TestScratchX(t *testing.T) {
 		}
 	}
 
-	checkBackends(t, filter(0xdeadbeef), []byte{}, XDPDrop)
-	checkBackends(t, filter(0), []byte{}, XDPDrop)
+	checkBackends(t, filter(0xdeadbeef), []byte{}, match)
+	checkBackends(t, filter(0), []byte{}, match)
 }
 
 func TestMemShift(t *testing.T) {
@@ -245,8 +221,8 @@ func TestMemShift(t *testing.T) {
 		}
 	}
 
-	checkBackends(t, filter(40), []byte{0, 0, 0xAA}, XDPDrop)
-	checkBackends(t, filter(0), []byte{0, 0, 0xF0}, XDPDrop)
+	checkBackends(t, filter(40), []byte{0, 0, 0xAA}, match)
+	checkBackends(t, filter(0), []byte{0, 0, 0xF0}, match)
 }
 
 func TestLoadExtLen(t *testing.T) {
@@ -261,7 +237,7 @@ func TestLoadExtLen(t *testing.T) {
 		}
 	}
 
-	checkBackends(t, filter(16), []byte{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef}, XDPDrop)
+	checkBackends(t, filter(16), []byte{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef}, match)
 }
 
 // check a OP b == res for both ALUOpConstant and ALUOpX
@@ -277,7 +253,7 @@ func checkAlu(t *testing.T, op bpf.ALUOp, a, b, res uint32) {
 		bpf.RetConstant{Val: 1},
 	}
 
-	checkBackends(t, constFilter, []byte{}, XDPDrop)
+	checkBackends(t, constFilter, []byte{}, match)
 
 	xFilter := []bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: a},
@@ -290,7 +266,7 @@ func checkAlu(t *testing.T, op bpf.ALUOp, a, b, res uint32) {
 		bpf.RetConstant{Val: 1},
 	}
 
-	checkBackends(t, xFilter, []byte{}, XDPDrop)
+	checkBackends(t, xFilter, []byte{}, match)
 }
 
 func TestALUAdd(t *testing.T) {
@@ -337,8 +313,8 @@ func TestALUDivZero(t *testing.T) {
 		bpf.RetConstant{Val: 1},
 	}
 
-	checkBackends(t, filter, []byte{0}, XDPPass)
-	checkBackends(t, filter, []byte{1}, XDPDrop)
+	checkBackends(t, filter, []byte{0}, noMatch)
+	checkBackends(t, filter, []byte{1}, match)
 }
 
 func TestALUOr(t *testing.T) {
@@ -397,7 +373,7 @@ func TestNegateA(t *testing.T) {
 		bpf.RetConstant{Val: 1},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPPass)
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 func TestJump(t *testing.T) {
@@ -414,7 +390,7 @@ func TestJump(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPPass)
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 // a needs to be != 0
@@ -426,9 +402,9 @@ func checkJump(t *testing.T, cond bpf.JumpTest, a, b uint32, result bool) {
 	}
 
 	// match if cond is true
-	action := XDPPass
+	expected := noMatch
 	if result {
-		action = XDPDrop
+		expected = match
 	}
 
 	// constant skipTrue
@@ -439,7 +415,7 @@ func checkJump(t *testing.T, cond bpf.JumpTest, a, b uint32, result bool) {
 		bpf.RetConstant{Val: 0},
 		bpf.RetConstant{Val: 1},
 	}
-	checkBackends(t, constTrueFilter, []byte{}, action)
+	checkBackends(t, constTrueFilter, []byte{}, expected)
 
 	// constant skipTrue & skipFalse
 	constBothFilter := []bpf.Instruction{
@@ -456,7 +432,7 @@ func checkJump(t *testing.T, cond bpf.JumpTest, a, b uint32, result bool) {
 		bpf.RetConstant{Val: 0},
 		bpf.RetConstant{Val: 1},
 	}
-	checkBackends(t, constBothFilter, []byte{}, action)
+	checkBackends(t, constBothFilter, []byte{}, expected)
 
 	// X skipTrue
 	xTrueFilter := []bpf.Instruction{
@@ -467,7 +443,7 @@ func checkJump(t *testing.T, cond bpf.JumpTest, a, b uint32, result bool) {
 		bpf.RetConstant{Val: 0},
 		bpf.RetConstant{Val: 1},
 	}
-	checkBackends(t, xTrueFilter, []byte{}, action)
+	checkBackends(t, xTrueFilter, []byte{}, expected)
 
 	// X skipTrue & skipFalse
 	xBothFilter := []bpf.Instruction{
@@ -485,7 +461,7 @@ func checkJump(t *testing.T, cond bpf.JumpTest, a, b uint32, result bool) {
 		bpf.RetConstant{Val: 0},
 		bpf.RetConstant{Val: 1},
 	}
-	checkBackends(t, xBothFilter, []byte{}, action)
+	checkBackends(t, xBothFilter, []byte{}, expected)
 }
 
 func TestJumpIfEqual(t *testing.T) {
@@ -558,7 +534,7 @@ func TestRetA(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPDrop)
+	checkBackends(t, filter, []byte{}, match)
 }
 
 func TestRetConstant(t *testing.T) {
@@ -568,13 +544,13 @@ func TestRetConstant(t *testing.T) {
 		bpf.RetConstant{Val: 1},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPDrop)
+	checkBackends(t, filter, []byte{}, match)
 
 	filter = []bpf.Instruction{
 		bpf.RetConstant{Val: 0},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPPass)
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 func TestTXA(t *testing.T) {
@@ -586,7 +562,7 @@ func TestTXA(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPDrop)
+	checkBackends(t, filter, []byte{}, match)
 }
 
 func TestTAX(t *testing.T) {
@@ -599,13 +575,34 @@ func TestTAX(t *testing.T) {
 		bpf.RetA{},
 	}
 
-	checkBackends(t, filter, []byte{}, XDPDrop)
+	checkBackends(t, filter, []byte{}, match)
 }
 
-// checkBackends builds an eBPF program using each backend, and checks it returns the correct action
-// Input packet is 0 padded to min ethernet length, and output is checked to be unchanged
-func checkBackends(tb testing.TB, filter []bpf.Instruction, in []byte, res XDPAction) {
-	tb.Helper()
+type result int
+
+const (
+	match result = iota
+	noMatch
+)
+
+func (r result) String() string {
+	switch r {
+	case match:
+		return "match"
+	case noMatch:
+		return "no match"
+	default:
+		return fmt.Sprintf("result(%d)", int(r))
+	}
+}
+
+// True IFF packet matches filter
+type backend func(testing.TB, []bpf.Instruction, []byte) result
+
+// checkBackends checks if all the backends match the packet as expected.
+// Input packet is 0 padded to min ethernet length.
+func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected result) {
+	t.Helper()
 
 	if len(in) < 14 {
 		t := make([]byte, 14)
@@ -613,13 +610,46 @@ func checkBackends(tb testing.TB, filter []bpf.Instruction, in []byte, res XDPAc
 		in = t
 	}
 
-	checkAction(tb, loadC(tb, filter), in, res)
-	checkAction(tb, loadEBPF(tb, filter), in, res)
+	check := func(b backend) func(*testing.T) {
+		return func(t *testing.T) {
+			if got := b(t, filter, in); got != expected {
+				t.Fatalf("Got %q, expected %q", got, expected)
+			}
+		}
+	}
+
+	t.Run("C", check(cBackend))
+	t.Run("eBPF", check(ebpfBackend))
 }
 
-func checkAction(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte, action XDPAction) {
-	tb.Helper()
+type XDPAction int
 
+func (r XDPAction) String() string {
+	switch r {
+	case XDPAborted:
+		return "XDPAborted"
+	case XDPDrop:
+		return "XDPDrop"
+	case XDPPass:
+		return "XDPPass"
+	case XDPTx:
+		return "XDPTx"
+	default:
+		return fmt.Sprintf("XDPResult(%d)", int(r))
+	}
+}
+
+const (
+	XDPAborted XDPAction = iota
+	XDPDrop
+	XDPPass
+	XDPTx
+)
+
+// testProg runs an eBPF program and checks it has not modified the packet
+func testProg(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte) result {
+	// -short skips tests that require permissions
+	// Skipping the tests this late ensures the eBPF program still builds at least
 	if testing.Short() {
 		tb.SkipNow()
 	}
@@ -628,6 +658,7 @@ func checkAction(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte, action XD
 	if err != nil {
 		tb.Fatal(err)
 	}
+	defer prog.Close()
 
 	ret, out, err := prog.Test(in)
 	if err != nil {
@@ -638,9 +669,14 @@ func checkAction(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte, action XD
 		tb.Fatalf("Program modified input:\nIn: %v\nOut: %v\n", in, out)
 	}
 
-	retAction := XDPAction(ret)
-
-	if retAction != action {
-		tb.Fatalf("Program returned %v, expected %v\n", retAction, action)
+	// The XDP programs we build drop matching packets
+	switch r := XDPAction(ret); r {
+	case XDPDrop:
+		return match
+	case XDPPass:
+		return noMatch
+	default:
+		tb.Fatalf("Unexpected XDP return code %v", r)
+		panic("unreachable")
 	}
 }

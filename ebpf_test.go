@@ -7,11 +7,8 @@ import (
 	"golang.org/x/net/bpf"
 )
 
-// loadEBPF compiles classic BPF to eBPF
-// XDPDrop on match, XDPPass otherwise
-func loadEBPF(tb testing.TB, insns []bpf.Instruction) *ebpf.ProgramSpec {
-	tb.Helper()
-
+// ebpfBacked is backend that compiles classic BPF to eBPF
+func ebpfBackend(tb testing.TB, insns []bpf.Instruction, in []byte) result {
 	prog, err := buildEBPF(insns)
 	if err != nil {
 		tb.Fatal(err)
@@ -19,10 +16,10 @@ func loadEBPF(tb testing.TB, insns []bpf.Instruction) *ebpf.ProgramSpec {
 
 	tb.Logf("\n%v", prog)
 
-	return &ebpf.ProgramSpec{
+	return testProg(tb, &ebpf.ProgramSpec{
 		Name:         "ebpf_filter",
 		Type:         ebpf.XDP,
 		Instructions: prog,
 		License:      "BSD",
-	}
+	}, in)
 }
