@@ -32,11 +32,8 @@ func TestFunctionName(t *testing.T) {
 
 const entryPoint = "xdp_filter"
 
-// loadC compiles classic BPF to C, which is compiled with clang
-// XDPDrop on match, XDPPass otherwise
-func loadC(tb testing.TB, insns []bpf.Instruction) *ebpf.ProgramSpec {
-	tb.Helper()
-
+// cBackend compiles classic BPF to C, which is compiled with clang
+func cBackend(tb testing.TB, insns []bpf.Instruction, in []byte) result {
 	elf, err := buildC(insns, entryPoint)
 	if err != nil {
 		tb.Fatal(err)
@@ -48,5 +45,5 @@ func loadC(tb testing.TB, insns []bpf.Instruction) *ebpf.ProgramSpec {
 		tb.Fatal(err)
 	}
 
-	return spec.Programs[entryPoint]
+	return testProg(tb, spec.Programs[entryPoint], in)
 }
