@@ -2,18 +2,30 @@ package cbpfc
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"golang.org/x/net/bpf"
 )
 
+// requireError ensures an error is not nil, and it contains contains.
+func requireError(tb testing.TB, err error, contains string) {
+	tb.Helper()
+
+	if err == nil {
+		tb.Fatalf("expected error %s", contains)
+	}
+
+	if !strings.Contains(err.Error(), contains) {
+		tb.Fatalf("error %v does not contain %s", err, contains)
+	}
+}
+
 // Make sure we bail out with 0 instructions
 func TestZero(t *testing.T) {
 	_, err := compile([]bpf.Instruction{})
 
-	if err == nil {
-		t.Fatal("zero length instructions compiled", err)
-	}
+	requireError(t, err, "can't campile 0 instructions")
 }
 
 func TestRaw(t *testing.T) {
@@ -21,9 +33,7 @@ func TestRaw(t *testing.T) {
 		bpf.RawInstruction{},
 	})
 
-	if err == nil {
-		t.Fatal("raw instruction accepted", err)
-	}
+	requireError(t, err, "unsupported instruction 0:")
 }
 
 func TestExtension(t *testing.T) {
@@ -42,9 +52,7 @@ func TestExtension(t *testing.T) {
 				t.Fatal("ExtLen not accepted", err)
 			}
 		default:
-			if err == nil {
-				t.Fatal("unsupported extension accepted")
-			}
+			requireError(t, err, "unsupported BPF extension 0:")
 		}
 	}
 }
@@ -56,9 +64,7 @@ func TestJumpOut(t *testing.T) {
 		bpf.Jump{Skip: 0},
 	})
 
-	if err == nil {
-		t.Fatal("out of bounds skip compiled")
-	}
+	requireError(t, err, "instruction 1: ja 0 flows past last instruction")
 }
 
 func TestJumpIfOut(t *testing.T) {
@@ -67,9 +73,7 @@ func TestJumpIfOut(t *testing.T) {
 		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 2, SkipTrue: 0, SkipFalse: 1},
 	})
 
-	if err == nil {
-		t.Fatal("out of bounds skip compiled")
-	}
+	requireError(t, err, "instruction 1: jneq #2,1 flows past last instruction")
 }
 
 func TestJumpIfXOut(t *testing.T) {
@@ -79,9 +83,7 @@ func TestJumpIfXOut(t *testing.T) {
 		bpf.JumpIfX{Cond: bpf.JumpEqual, SkipTrue: 1, SkipFalse: 0},
 	})
 
-	if err == nil {
-		t.Fatal("out of bounds skip compiled")
-	}
+	requireError(t, err, "instruction 2: jeq x,1 flows past last instruction")
 }
 
 // Out of bounds fall through - last block doesn't end in return
@@ -90,9 +92,7 @@ func TestFallthroughOut(t *testing.T) {
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 	})
 
-	if err == nil {
-		t.Fatal("out of bounds fall through compiled")
-	}
+	requireError(t, err, "instruction 0: ld #0 flows past last instruction")
 }
 
 // Jump normalization
@@ -484,10 +484,7 @@ func TestDivisionByZeroImm(t *testing.T) {
 			bpf.RetConstant{},
 		}))
 
-		err := addDivideByZeroGuards(blocks)
-		if err == nil {
-			t.Fatal("Division by constant 0 not rejected")
-		}
+		requireError(t, addDivideByZeroGuards(blocks), "divides by 0")
 	}
 
 	test(t, bpf.ALUOpDiv)
