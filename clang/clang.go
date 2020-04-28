@@ -9,8 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 // CompileOpts configure how an XDP program is compiled / built
@@ -37,7 +35,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 	if outdir == "" {
 		outdir, err = ioutil.TempDir("", "cbpfc-clang")
 		if err != nil {
-			return nil, errors.Wrap(err, "can't create output directory")
+			return nil, fmt.Errorf("can't create output directory: %v", err)
 		}
 		defer os.RemoveAll(outdir)
 	} else {
@@ -48,7 +46,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 	outputFile := fmt.Sprintf("%s.elf", name)
 	err = ioutil.WriteFile(filepath.Join(outdir, inputFile), source, 0644)
 	if err != nil {
-		return nil, errors.Wrap(err, "can't write out program")
+		return nil, fmt.Errorf("can't write out program: %v", err)
 	}
 
 	flags := []string{
@@ -65,7 +63,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 		// debug build script will be in a different directory, relative imports won't work
 		absInclude, err := filepath.Abs(include)
 		if err != nil {
-			return nil, errors.Wrapf(err, "can't get absolute path to include %s", include)
+			return nil, fmt.Errorf("can't get absolute path to include %s: %v", include, err)
 		}
 
 		flags = append(flags, "-I", absInclude)
@@ -82,7 +80,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 		cmdline := cmd.Path + " " + strings.Join(flags, " ") + "\n"
 		err := ioutil.WriteFile(filepath.Join(outdir, "build"), []byte(cmdline), 0644)
 		if err != nil {
-			return nil, errors.Wrap(err, "can't write build cmdline")
+			return nil, fmt.Errorf("can't write build cmdline: %v", err)
 		}
 	}
 
@@ -91,15 +89,15 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 	if err != nil {
 		switch e := err.(type) {
 		case *exec.ExitError:
-			return nil, errors.Wrapf(e, "unable to compile C:\n%s", string(e.Stderr))
+			return nil, fmt.Errorf("unable to compile C: %w:\n%s", err, string(e.Stderr))
 		default:
-			return nil, errors.Wrapf(e, "unable to compile C")
+			return nil, fmt.Errorf("unable to compile C: %v", err)
 		}
 	}
 
 	elf, err := ioutil.ReadFile(filepath.Join(outdir, outputFile))
 	if err != nil {
-		return nil, errors.Wrap(err, "can't read ELF")
+		return nil, fmt.Errorf("can't read ELF: %v", err)
 	}
 
 	return elf, nil

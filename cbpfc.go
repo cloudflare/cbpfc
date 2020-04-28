@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
 
@@ -112,7 +111,7 @@ type packetGuardAbsolute struct {
 
 // Assemble implements the Instruction Assemble method.
 func (p packetGuardAbsolute) Assemble() (bpf.RawInstruction, error) {
-	return bpf.RawInstruction{}, errors.Errorf("unsupported")
+	return bpf.RawInstruction{}, fmt.Errorf("unsupported")
 }
 
 // packetGuardIndirect is a "fake" instruction
@@ -123,7 +122,7 @@ type packetGuardIndirect struct {
 
 // Assemble implements the Instruction Assemble method.
 func (p packetGuardIndirect) Assemble() (bpf.RawInstruction, error) {
-	return bpf.RawInstruction{}, errors.Errorf("unsupported")
+	return bpf.RawInstruction{}, fmt.Errorf("unsupported")
 }
 
 // initializeScratch is a "fake" instruction
@@ -135,7 +134,7 @@ type initializeScratch struct {
 
 // Assemble implements the Instruction Assemble method.
 func (i initializeScratch) Assemble() (bpf.RawInstruction, error) {
-	return bpf.RawInstruction{}, errors.Errorf("unsupported")
+	return bpf.RawInstruction{}, fmt.Errorf("unsupported")
 }
 
 // checksXNotZero is a "fake" instruction
@@ -145,7 +144,7 @@ type checkXNotZero struct {
 
 // Assemble implements the Instruction Assemble method.
 func (c checkXNotZero) Assemble() (bpf.RawInstruction, error) {
-	return bpf.RawInstruction{}, errors.Errorf("unsupported")
+	return bpf.RawInstruction{}, fmt.Errorf("unsupported")
 }
 
 // compile compiles a cBPF program to an ordered slice of blocks, with:
@@ -165,7 +164,7 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 	// Split into blocks
 	blocks, err := splitBlocks(instructions)
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to compute blocks")
+		return nil, fmt.Errorf("unable to compute blocks: %v", err)
 	}
 
 	// Initialize registers
@@ -188,26 +187,26 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 func validateInstructions(insns []bpf.Instruction) error {
 	// Can't do anything meaningful with no instructions
 	if len(insns) == 0 {
-		return errors.New("can't campile 0 instructions")
+		return fmt.Errorf("can't campile 0 instructions")
 	}
 
 	for pc, insn := range insns {
 		// Assemble does some input validation
 		_, err := insn.Assemble()
 		if err != nil {
-			return errors.Errorf("can't assemble insnstruction %d: %v", pc, insn)
+			return fmt.Errorf("can't assemble insnstruction %d: %v", pc, insn)
 		}
 
 		switch i := insn.(type) {
 		case bpf.RawInstruction:
-			return errors.Errorf("unsupported instruction %d: %v", pc, insn)
+			return fmt.Errorf("unsupported instruction %d: %v", pc, insn)
 
 		case bpf.LoadExtension:
 			switch i.Num {
 			case bpf.ExtLen:
 				break
 			default:
-				return errors.Errorf("unsupported BPF extension %d: %v", pc, insn)
+				return fmt.Errorf("unsupported BPF extension %d: %v", pc, insn)
 			}
 		}
 	}
@@ -332,7 +331,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 			t := next.skipToPos(s)
 
 			if t >= pos(len(instructions)) {
-				return nil, errors.Errorf("instruction %v flows past last instruction", next.last())
+				return nil, fmt.Errorf("instruction %v flows past last instruction", next.last())
 			}
 
 			targets[t] = append(targets[t], targetBlock{next, s == 0})
@@ -396,7 +395,7 @@ func addDivideByZeroGuards(blocks []*block) error {
 			switch i := insn.Instruction.(type) {
 			case bpf.ALUOpConstant:
 				if isDivision(i.Op) && i.Val == 0 {
-					return errors.Errorf("instruction %v divides by 0", insn)
+					return fmt.Errorf("instruction %v divides by 0", insn)
 				}
 			case bpf.ALUOpX:
 				if isDivision(i.Op) && !notZero {

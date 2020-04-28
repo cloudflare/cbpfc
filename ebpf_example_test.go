@@ -1,8 +1,9 @@
 package cbpfc
 
 import (
+	"fmt"
+
 	"github.com/cilium/ebpf/asm"
-	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
 
@@ -40,7 +41,7 @@ func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
 		LabelPrefix: "filter",
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "converting filter to eBPF")
+		return nil, fmt.Errorf("converting filter to eBPF: %w", err)
 	}
 
 	prog := asm.Instructions{

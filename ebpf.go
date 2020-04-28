@@ -5,7 +5,6 @@ import (
 	"math"
 
 	"github.com/cilium/ebpf/asm"
-	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
 
@@ -125,7 +124,7 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) (asm.Instructions, error) {
 	}
 
 	if eOpts.StackOffset&1 == 1 {
-		return nil, errors.Errorf("unaligned stack offset")
+		return nil, fmt.Errorf("unaligned stack offset")
 	}
 
 	eInsns := asm.Instructions{}
@@ -134,7 +133,7 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) (asm.Instructions, error) {
 		for i, insn := range block.insns {
 			eInsn, err := insnToEBPF(insn, block, eOpts)
 			if err != nil {
-				return nil, errors.Wrapf(err, "unable to compile %v", insn)
+				return nil, fmt.Errorf("unable to compile %v: %v", insn, err)
 			}
 
 			// First insn of the block, add symbol so it can be referenced in jumps
@@ -167,7 +166,7 @@ func registersUnique(regs ...asm.Register) error {
 		}
 
 		if _, ok := seen[reg]; ok {
-			return errors.Errorf("register %v used twice", reg)
+			return fmt.Errorf("register %v used twice", reg)
 		}
 		seen[reg] = struct{}{}
 	}
@@ -178,7 +177,7 @@ func registersUnique(regs ...asm.Register) error {
 // registerValid ensures that a register is a valid ebpf register
 func registerValid(reg asm.Register) error {
 	if reg > asm.R9 {
-		return errors.Errorf("invalid register %v", reg)
+		return fmt.Errorf("invalid register %v", reg)
 	}
 
 	return nil
@@ -194,7 +193,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		return ebpfInsn(asm.LoadMem(opts.reg(i.Dst), asm.R10, opts.stackOffset(i.N), asm.Word))
 	case bpf.LoadAbsolute:
 		if i.Off > math.MaxInt16 {
-			return nil, errors.Errorf("LoadAbsolute offset %v too large", i.Off)
+			return nil, fmt.Errorf("LoadAbsolute offset %v too large", i.Off)
 		}
 
 		return appendNtoh(opts.regA, sizeToEBPF[i.Size],
@@ -202,7 +201,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		)
 	case bpf.LoadIndirect:
 		if i.Off > math.MaxInt16 {
-			return nil, errors.Errorf("LoadIndirect offset %v too large", i.Off)
+			return nil, fmt.Errorf("LoadIndirect offset %v too large", i.Off)
 		}
 
 		return appendNtoh(opts.regA, sizeToEBPF[i.Size],
@@ -211,7 +210,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		)
 	case bpf.LoadMemShift:
 		if i.Off > math.MaxInt16 {
-			return nil, errors.Errorf("LoadMemShift offset %v too large", i.Off)
+			return nil, fmt.Errorf("LoadMemShift offset %v too large", i.Off)
 		}
 
 		return ebpfInsn(
@@ -225,7 +224,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 
 	case bpf.LoadExtension:
 		if i.Num != bpf.ExtLen {
-			return nil, errors.Errorf("unsupported BPF extension %v", i)
+			return nil, fmt.Errorf("unsupported BPF extension %v", i)
 		}
 
 		return ebpfInsn(
@@ -299,7 +298,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		return ebpfInsn(asm.JEq.Imm(opts.regX, 0, opts.label(noMatchLabel)))
 
 	default:
-		return nil, errors.Errorf("unsupported instruction %v", insn)
+		return nil, fmt.Errorf("unsupported instruction %v", insn)
 	}
 }
 
