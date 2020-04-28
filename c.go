@@ -86,7 +86,7 @@ type COpts struct {
 // non 0 if the packet does match.
 func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 	if !funcNameRegex.MatchString(opts.FunctionName) {
-		return "", errors.Errorf("invalid FunctioName %s", opts.FunctionName)
+		return "", errors.Errorf("invalid FunctionName %q", opts.FunctionName)
 	}
 
 	blocks, err := compile(filter)

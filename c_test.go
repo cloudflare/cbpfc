@@ -18,8 +18,8 @@ func TestFunctionName(t *testing.T) {
 		if valid && err != nil {
 			t.Fatalf("valid function name %s rejected: %v", name, err)
 		}
-		if !valid && err == nil {
-			t.Fatalf("invalid function name %s not rejected", name)
+		if !valid {
+			requireError(t, err, "invalid FunctionName")
 		}
 	}
 
