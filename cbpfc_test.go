@@ -390,13 +390,7 @@ func TestUninitializedScratch(t *testing.T) {
 	})
 
 	blocks := mustSplitBlocks(t, 1, insns)
-
-	initializeMemory(blocks)
-
-	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: initializeScratch{N: 2}}},
-		insns,
-	), nil)
+	requireError(t, initializeMemory(blocks), "instruction 0: ld M[2] reads potentially uninitalized scratch register M[2]")
 }
 
 // scratch reg initialized in one branch, but not the other
@@ -416,15 +410,7 @@ func TestPartiallyUninitializedScratch(t *testing.T) {
 	})
 
 	blocks := mustSplitBlocks(t, 3, insns)
-
-	initializeMemory(blocks)
-
-	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: initializeScratch{N: 5}}},
-		insns[:2],
-	), nil)
-	matchBlock(t, blocks[1], insns[2:3], nil)
-	matchBlock(t, blocks[2], insns[3:], nil)
+	requireError(t, initializeMemory(blocks), "instruction 3: ld M[5] reads potentially uninitalized scratch register M[5]")
 }
 
 // Test block splitting
