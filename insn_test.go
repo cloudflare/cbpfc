@@ -53,6 +53,26 @@ func TestZeroInitX(t *testing.T) {
 	checkBackends(t, filter, []byte{}, noMatch)
 }
 
+func TestPartialZeroInitX(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		bpf.LoadAbsolute{Off: 0, Size: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 1 or 2
+
+		// block 1
+		bpf.TAX{}, // initialize RegX
+		// Fall through
+
+		// block 2
+		bpf.TXA{}, // RegX used potentially uninitialized
+		bpf.RetA{},
+	}
+
+	checkBackends(t, filter, []byte{0}, noMatch)
+	checkBackends(t, filter, []byte{3}, match)
+}
+
 func TestLoadConstantA(t *testing.T) {
 	t.Parallel()
 

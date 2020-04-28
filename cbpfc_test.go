@@ -381,6 +381,57 @@ func checkMemoryStatus(t *testing.T, expected map[bpf.Instruction]bool, test fun
 	}
 }
 
+// reg uninitialized and used in one block
+func TestUninitializedReg(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.RetA{},
+	})
+
+	blocks := mustSplitBlocks(t, 1, insns)
+
+	err := initializeMemory(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: bpf.LoadConstant{Dst: bpf.RegA, Val: 0}}},
+		insns,
+	), nil)
+}
+
+// reg initialized in one branch, but not the other
+func TestPartiallyUninitializedReg(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadConstant{Dst: bpf.RegA, Val: 3},
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 1 or 2
+
+		// block 1
+		/* 2 */ bpf.TAX{}, // initialize RegX
+		// fall through to block 2
+
+		// block 2
+		/* 3 */ bpf.TXA{}, // RegX used potentially uninitialized
+		/* 4 */ bpf.RetA{},
+	})
+
+	blocks := mustSplitBlocks(t, 3, insns)
+
+	err := initializeMemory(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: bpf.LoadConstant{Dst: bpf.RegX, Val: 0}}},
+		insns[:2],
+	), nil)
+	matchBlock(t, blocks[1], insns[2:3], nil)
+	matchBlock(t, blocks[2], insns[3:], nil)
+}
+
 // scratch reg uninitialized and used in one block
 func TestUninitializedScratch(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
