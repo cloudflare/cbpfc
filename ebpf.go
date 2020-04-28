@@ -292,9 +292,6 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.label(noMatchLabel)),
 		)
 
-	case initializeScratch:
-		return ebpfInsn(asm.StoreImm(asm.R10, opts.stackOffset(i.N), 0, asm.Word))
-
 	case checkXNotZero:
 		return ebpfInsn(asm.JEq.Imm(opts.regX, 0, opts.label(noMatchLabel)))
 

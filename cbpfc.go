@@ -7,7 +7,7 @@
 //
 // Both the C and eBPF output are intended to be accepted by the kernel verifier:
 //   - All packet loads are guarded with runtime packet length checks
-//   - RegA, RegX and M[] are zero initialized as required
+//   - RegA and RegX are zero initialized as required
 //   - Division by zero is guarded by runtime checks
 //
 // The generated C / eBPF is intended to be embedded into a larger C / eBPF program.
@@ -126,18 +126,6 @@ func (p packetGuardIndirect) Assemble() (bpf.RawInstruction, error) {
 	return bpf.RawInstruction{}, errors.Errorf("unsupported")
 }
 
-// initializeScratch is a "fake" instruction
-// that zero initializes a scratch position
-type initializeScratch struct {
-	// Scratch position that needs to be initialized
-	N int
-}
-
-// Assemble implements the Instruction Assemble method.
-func (i initializeScratch) Assemble() (bpf.RawInstruction, error) {
-	return bpf.RawInstruction{}, errors.Errorf("unsupported")
-}
-
 // checksXNotZero is a "fake" instruction
 // that returns no match if X is 0
 type checkXNotZero struct {
@@ -169,7 +157,10 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 	}
 
 	// Initialize registers
-	initializeMemory(blocks)
+	err = initializeMemory(blocks)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check we don't divide by zero
 	err = addDivideByZeroGuards(blocks)
@@ -675,8 +666,8 @@ func (r memStatus) or(other memStatus) memStatus {
 	})
 }
 
-// initializeMemory zero initializes all the memory (regs & scratch) that the BPF program reads from before writing to.
-func initializeMemory(blocks []*block) {
+// initializeMemory zero initializes all the registers that the BPF program reads from before writing to. Returns an error if any scratch memory is used uninitialized.
+func initializeMemory(blocks []*block) error {
 	// memory initialized at the start of each block
 	statuses := make(map[*block]memStatus)
 
@@ -687,7 +678,15 @@ func initializeMemory(blocks []*block) {
 		status := statuses[block]
 
 		for _, insn := range block.insns {
-			uninitialized = uninitialized.or(memUninitializedReads(insn.Instruction, status))
+			insnUninitialized := memUninitializedReads(insn.Instruction, status)
+			// Check no uninitialized scratch registers are read
+			for scratch, uninit := range insnUninitialized.scratch {
+				if uninit {
+					return errors.Errorf("instruction %v reads potentially uninitalized scratch register M[%d]", insn, scratch)
+				}
+			}
+
+			uninitialized = uninitialized.or(insnUninitialized)
 			status = status.or(memWrites(insn.Instruction))
 		}
 
@@ -718,19 +717,8 @@ func initializeMemory(blocks []*block) {
 			},
 		})
 	}
-
-	for scratch, uninit := range uninitialized.scratch {
-		if !uninit {
-			continue
-		}
-
-		initInsns = append(initInsns, instruction{
-			Instruction: initializeScratch{
-				N: scratch,
-			},
-		})
-	}
 	blocks[0].insns = append(initInsns, blocks[0].insns...)
+	return nil
 }
 
 // memUninitializedReads returns the memory read by insn that has not yet been initialized according to initialized.

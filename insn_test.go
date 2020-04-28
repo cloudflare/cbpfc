@@ -9,6 +9,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/net/bpf"
+
 	// syscall has a wonky RLIM_INFINITY, and no RLIMIT_MEMLOCK
 	"golang.org/x/sys/unix"
 )
@@ -46,18 +47,6 @@ func TestZeroInitX(t *testing.T) {
 
 	filter := []bpf.Instruction{
 		bpf.TXA{},
-		bpf.RetA{},
-	}
-
-	checkBackends(t, filter, []byte{}, noMatch)
-}
-
-func TestZeroInitScratch(t *testing.T) {
-	t.Parallel()
-	t.Skip() // rejected by kernel
-
-	filter := []bpf.Instruction{
-		bpf.LoadScratch{Dst: bpf.RegA, N: 7},
 		bpf.RetA{},
 	}
 
