@@ -592,6 +592,10 @@ func guaranteedGuard(targets map[pos]*block, opts packetGuardOpts, cache map[pos
 		if blockNeverMatches(target) {
 			continue
 		}
+		if guard, ok := cache[target.id]; ok {
+			targetGuards = append(targetGuards, guard)
+			continue
+		}
 
 		insnsCovered, insnsGuard := opts.requiredGuard(target.insns)
 
@@ -601,17 +605,13 @@ func guaranteedGuard(targets map[pos]*block, opts packetGuardOpts, cache map[pos
 			continue
 		}
 
-		var guaranteed packetGuard
-		if memoizedValue, exists := cache[target.id]; exists {
-			guaranteed = memoizedValue
-		} else {
-			guaranteed = guaranteedGuard(target.jumps, opts, cache)
-			cache[target.id] = guaranteed
-		}
+		guaranteed := guaranteedGuard(target.jumps, opts, cache)
 
 		if guaranteed > insnsGuard {
 			insnsGuard = guaranteed
 		}
+
+		cache[target.id] = insnsGuard
 
 		targetGuards = append(targetGuards, insnsGuard)
 	}
