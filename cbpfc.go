@@ -576,11 +576,22 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 // A packet can only match ("true") by going through guards 4 and 6. It does not have to go through guard 8.
 // guaranteedGuard would return 6.
 func guaranteedGuard(targets map[pos]*block, opts packetGuardOpts) packetGuard {
+
+	// Inner implementation - Uses memoization
+	return guaranteedGuardCached(targets, opts, make(map[*block]packetGuard))
+}
+
+// 'cache' is used in order to not calculate guard more than once for the same block.
+func guaranteedGuardCached(targets map[pos]*block, opts packetGuardOpts, cache map[*block]packetGuard) packetGuard {
 	targetGuards := []packetGuard{}
 
 	for _, target := range targets {
 		// Block can't match the packet, ignore it
 		if blockNeverMatches(target) {
+			continue
+		}
+		if guard, ok := cache[target]; ok {
+			targetGuards = append(targetGuards, guard)
 			continue
 		}
 
@@ -592,9 +603,13 @@ func guaranteedGuard(targets map[pos]*block, opts packetGuardOpts) packetGuard {
 			continue
 		}
 
-		if guaranteed := guaranteedGuard(target.jumps, opts); guaranteed > insnsGuard {
+		guaranteed := guaranteedGuardCached(target.jumps, opts, cache)
+
+		if guaranteed > insnsGuard {
 			insnsGuard = guaranteed
 		}
+
+		cache[target] = insnsGuard
 
 		targetGuards = append(targetGuards, insnsGuard)
 	}
