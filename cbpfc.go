@@ -179,14 +179,14 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 func validateInstructions(insns []bpf.Instruction) error {
 	// Can't do anything meaningful with no instructions
 	if len(insns) == 0 {
-		return errors.New("can't campile 0 instructions")
+		return errors.New("can't compile 0 instructions")
 	}
 
 	for pc, insn := range insns {
 		// Assemble does some input validation
 		_, err := insn.Assemble()
 		if err != nil {
-			return errors.Errorf("can't assemble insnstruction %d: %v", pc, insn)
+			return errors.Errorf("can't assemble instruction %d: %v", pc, insn)
 		}
 
 		switch i := insn.(type) {
@@ -697,7 +697,7 @@ func initializeMemory(blocks []*block) error {
 			// Check no uninitialized scratch registers are read
 			for scratch, uninit := range insnUninitialized.scratch {
 				if uninit {
-					return errors.Errorf("instruction %v reads potentially uninitalized scratch register M[%d]", insn, scratch)
+					return errors.Errorf("instruction %v reads potentially uninitialized scratch register M[%d]", insn, scratch)
 				}
 			}
 
@@ -718,7 +718,7 @@ func initializeMemory(blocks []*block) error {
 		}
 	}
 
-	// new instructions we need to prepend to intialize unitialized registers
+	// new instructions we need to prepend to initialize uninitialized registers
 	initInsns := []instruction{}
 	for reg, uninit := range uninitialized.regs {
 		if !uninit {
