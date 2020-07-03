@@ -25,7 +25,7 @@ func requireError(tb testing.TB, err error, contains string) {
 func TestZero(t *testing.T) {
 	_, err := compile([]bpf.Instruction{})
 
-	requireError(t, err, "can't campile 0 instructions")
+	requireError(t, err, "can't compile 0 instructions")
 }
 
 func TestRaw(t *testing.T) {
@@ -441,7 +441,7 @@ func TestUninitializedScratch(t *testing.T) {
 	})
 
 	blocks := mustSplitBlocks(t, 1, insns)
-	requireError(t, initializeMemory(blocks), "instruction 0: ld M[2] reads potentially uninitalized scratch register M[2]")
+	requireError(t, initializeMemory(blocks), "instruction 0: ld M[2] reads potentially uninitialized scratch register M[2]")
 }
 
 // scratch reg initialized in one branch, but not the other
@@ -461,7 +461,7 @@ func TestPartiallyUninitializedScratch(t *testing.T) {
 	})
 
 	blocks := mustSplitBlocks(t, 3, insns)
-	requireError(t, initializeMemory(blocks), "instruction 3: ld M[5] reads potentially uninitalized scratch register M[5]")
+	requireError(t, initializeMemory(blocks), "instruction 3: ld M[5] reads potentially uninitialized scratch register M[5]")
 }
 
 // Test block splitting

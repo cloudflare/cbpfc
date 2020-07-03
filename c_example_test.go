@@ -64,7 +64,7 @@ type testTemplateOpts struct {
 	ProgramName string
 }
 
-// ExampleToC demonstrates how to use ToC() to embded a cBPF filter
+// ExampleToC demonstrates how to use ToC() to embed a cBPF filter
 // in a C program, and compile it to eBPF.
 func ExampleToC() {
 	// simple cBPF filter that matches all packets
@@ -84,7 +84,7 @@ func ExampleToC() {
 
 // buildC compiles a cBPF filter to C, embeds it in a C template,
 // and compiles the resulting C program to eBPF / XDP using clang.
-// The XDP program XDP_DROP's incomming packets that match the filter.
+// The XDP program XDP_DROP's incoming packets that match the filter.
 // Returns the compiled ELF
 func buildC(filter []bpf.Instruction, programName string) ([]byte, error) {
 	filterName := programName + "_filter"

@@ -6,7 +6,7 @@ import (
 	"golang.org/x/net/bpf"
 )
 
-// ExampleToEBPF demonstrates how to use ToEBPF() to embded a cBPF filter
+// ExampleToEBPF demonstrates how to use ToEBPF() to embed a cBPF filter
 // in an eBPF assembly program.
 func ExampleToEBPF() {
 	// simple cBPF filter that matches all packets
@@ -25,7 +25,7 @@ func ExampleToEBPF() {
 }
 
 // buildEBPF compiles a cBPF filter to eBPF, and embeds it an eBPF program.
-// The XDP program XDP_DROP's incomming packets that match the filter.
+// The XDP program XDP_DROP's incoming packets that match the filter.
 // Returns the eBPF program instructions
 func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
 	ebpfFilter, err := ToEBPF(filter, EBPFOpts{
