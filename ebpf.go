@@ -138,7 +138,7 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) (asm.Instructions, error) {
 			}
 
 			// First insn of the block, add symbol so it can be referenced in jumps
-			if block.IsTarget && i == 0 {
+			if i == 0 {
 				eInsn[0].Symbol = eOpts.label(block.Label())
 			}
 
@@ -334,9 +334,6 @@ func condToEBPF(opts ebpfOpts, skipTrue, skipFalse skip, blk *block, cond bpf.Ju
 		trueLabel, falseLabel = falseLabel, trueLabel
 
 		trueOnly = false
-
-		// skipFalse could have fallen through before
-		blk.skipToBlock(skipFalse).IsTarget = true
 	}
 
 	if trueOnly {

@@ -18,7 +18,8 @@ uint32_t {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
 	uint32_t a, x, m[16];
 
 {{range $i, $b := .Blocks}}
-{{if $b.IsTarget}}{{$b.Label}}:{{end}}
+{{$b.Label}}:
+__attribute__((unused));
 {{- range $i, $s := $b.Statements}}
 	{{$s}}
 {{- end}}

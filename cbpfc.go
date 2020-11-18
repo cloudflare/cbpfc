@@ -69,10 +69,6 @@ type block struct {
 	// id of the instruction that started this block
 	// Unique, but not guaranteed to match insns[0].id after blocks are modified
 	id pos
-
-	// True IFF another block jumps to this block as a target
-	// A block falling-through to this one does not count
-	IsTarget bool
 }
 
 // newBlock creates a block with copy of insns
@@ -279,14 +275,6 @@ func visitBlock(insns []instruction, target pos) (*block, []skip) {
 	return newBlock(insns), []skip{0}
 }
 
-// targetBlock is a block that targets (ie jumps) to another block
-// used internally by splitBlocks()
-type targetBlock struct {
-	*block
-	// True IFF the block falls through to the other block (skip == 0)
-	isFallthrough bool
-}
-
 // splitBlocks splits the cBPF into an ordered list of blocks.
 //
 // The blocks are preserved in the order they are found as this guarantees that
@@ -298,7 +286,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 
 	// map of targets to blocks that target them
 	// target 0 is for the base case
-	targets := map[pos][]targetBlock{
+	targets := map[pos][]*block{
 		0: nil,
 	}
 
@@ -326,7 +314,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 				return nil, errors.Errorf("instruction %v flows past last instruction", next.last())
 			}
 
-			targets[t] = append(targets[t], targetBlock{next, s == 0})
+			targets[t] = append(targets[t], next)
 		}
 
 		jmpBlocks := targets[target]
@@ -334,11 +322,6 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 		// Mark all the blocks that jump to the block we've just visited as doing so
 		for _, jmpBlock := range jmpBlocks {
 			jmpBlock.jumps[target] = next
-
-			// Not a fallthrough, the block we've just visited is explicitly jumped to
-			if !jmpBlock.isFallthrough {
-				next.IsTarget = true
-			}
 		}
 
 		blocks = append(blocks, next)
@@ -351,7 +334,7 @@ func splitBlocks(instructions []instruction) ([]*block, error) {
 }
 
 // sortTargets sorts the target positions (keys), lowest first
-func sortTargets(targets map[pos][]targetBlock) []pos {
+func sortTargets(targets map[pos][]*block) []pos {
 	keys := make([]pos, len(targets))
 
 	i := 0

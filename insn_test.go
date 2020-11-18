@@ -403,6 +403,22 @@ func TestJump(t *testing.T) {
 	checkBackends(t, filter, []byte{}, noMatch)
 }
 
+// Jump that does nothing.
+func TestJump0(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		bpf.LoadAbsolute{Off: 0, Size: 1},
+		bpf.Jump{Skip: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual},
+		bpf.JumpIfX{Cond: bpf.JumpEqual},
+		bpf.RetA{},
+	}
+
+	checkBackends(t, filter, []byte{}, noMatch)
+	checkBackends(t, filter, []byte{1}, match)
+}
+
 // a needs to be != 0
 func checkJump(t *testing.T, cond bpf.JumpTest, a, b uint32, result bool) {
 	t.Helper()
