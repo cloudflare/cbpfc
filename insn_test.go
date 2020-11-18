@@ -159,6 +159,26 @@ func TestLoadIndirect(t *testing.T) {
 	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, noMatch)
 }
 
+// The 0 scratch slot is usable.
+func TestScratchZero(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		bpf.LoadConstant{Dst: bpf.RegA, Val: 4},
+		bpf.StoreScratch{Src: bpf.RegA, N: 0},
+
+		// clobber the reg in the mean time
+		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
+
+		bpf.LoadScratch{Dst: bpf.RegA, N: 0},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 4, SkipTrue: 1},
+		bpf.RetConstant{Val: 0},
+		bpf.RetConstant{Val: 1},
+	}
+
+	checkBackends(t, filter, nil, match)
+}
+
 func TestScratchA(t *testing.T) {
 	t.Parallel()
 
