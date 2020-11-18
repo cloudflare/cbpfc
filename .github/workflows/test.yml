@@ -1,0 +1,38 @@
+# Anytime we push to any branch
+on: push
+
+jobs:
+  test:
+    name: Test clang-${{ matrix.clang }}
+    runs-on: ubuntu-18.04
+
+    strategy:
+      matrix:
+        clang: ["6.0", "7", "8", "9"]
+
+    steps:
+    - name: Set up Go 1.x
+      uses: actions/setup-go@v2
+      with:
+        go-version: ^1.15
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Install clang
+      run: |
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key 2>/dev/null | sudo apt-key add -
+        echo 'deb http://apt.llvm.org/bionic/ llvm-toolchain-bionic-${{ matrix.clang }} main' | sudo tee /etc/apt/sources.list.d/clang.list
+        # Only update the llvm repo, this is a lot faster.
+        sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/clang.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+        sudo apt-get install -y clang-${{ matrix.clang }}
+
+    - name: Check lint
+      # gofmt doesn't report any changes
+      run: test -z $(gofmt -l ./ | tee /dev/stderr)
+
+    - name: Run tests
+      env:
+        CLANG: clang-${{ matrix.clang }}
+      # tests need to run as root to load XDP programs
+      run: sudo -E env "PATH=$PATH" go test ./...
