@@ -1,5 +1,7 @@
-language: go
 dist: xenial
+language: go
+go:
+  - "1.15"
 
 env:
   global:
