@@ -116,7 +116,8 @@ func buildC(filter []bpf.Instruction, programName string) ([]byte, error) {
 
 	// compile C program
 	elf, err := clang.Compile(c.Bytes(), entryPoint, clang.Opts{
-		Clang: clangBin,
+		Clang:     clangBin,
+		EmitDebug: true, // For BTF
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "compiling C")

@@ -25,7 +25,8 @@ type Opts struct {
 	// Uses a temporary directory if empty.
 	Output string
 
-	// emit DWARF debug info in the XDP elf
+	// Emit DWARF debug info in the XDP elf.
+	// Required for BTF.
 	EmitDebug bool
 }
 
