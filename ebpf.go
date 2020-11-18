@@ -52,7 +52,8 @@ type EBPFOpts struct {
 	// Must be different to PacketStart and PacketEnd, but Result can be reused.
 	Working [4]asm.Register
 
-	// StackOffset is the first stack offset that can be used.
+	// StackOffset is the number of bytes of stack already used / reserved.
+	// R10 (ebpf frame pointer) + StackOffset will be used as the top of the stack.
 	StackOffset int
 
 	// LabelPrefix is the prefix to prepend to labels used internally.
@@ -90,8 +91,10 @@ func (e ebpfOpts) label(name string) string {
 	return fmt.Sprintf("%s_%s", e.LabelPrefix, name)
 }
 
-func (e ebpfOpts) stackOffset(n int) int16 {
-	return -int16(e.StackOffset + n*4)
+// eBPF stack address offset for BPF scratch slot scracth.
+func (e ebpfOpts) stackOffset(scratch int) int16 {
+	// First usable stack space ends at StackOffset.
+	return -int16(e.StackOffset + (scratch+1)*4)
 }
 
 // ToEBF converts a cBPF filter to eBPF.
