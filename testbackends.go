@@ -227,6 +227,11 @@ func ebpfBackend(filter []bpf.Instruction, in []byte) (result, error) {
 
 // kernelBackend is a backend that runs cBPF in the kernel
 func kernelBackend(insns []bpf.Instruction, in []byte) (result, error) {
+	// To mimick cbpfc's behavior.
+	if len(insns) == 0 {
+		return 0, fmt.Errorf("can't compile 0 instructions")
+	}
+
 	filter, err := bpf.Assemble(insns)
 	if err != nil {
 		return 0, err
