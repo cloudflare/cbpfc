@@ -1,13 +1,10 @@
 package cbpfc
 
 import (
-	"bytes"
 	"flag"
-	"fmt"
 	"os"
 	"testing"
 
-	"github.com/cilium/ebpf"
 	"golang.org/x/net/bpf"
 
 	// syscall has a wonky RLIM_INFINITY, and no RLIMIT_MEMLOCK
@@ -624,27 +621,6 @@ func TestTAX(t *testing.T) {
 	checkBackends(t, filter, []byte{}, match)
 }
 
-type result int
-
-const (
-	match result = iota
-	noMatch
-)
-
-func (r result) String() string {
-	switch r {
-	case match:
-		return "match"
-	case noMatch:
-		return "no match"
-	default:
-		return fmt.Sprintf("result(%d)", int(r))
-	}
-}
-
-// True IFF packet matches filter
-type backend func(testing.TB, []bpf.Instruction, []byte) result
-
 // checkBackends checks if all the backends match the packet as expected.
 // Input packet is 0 padded to min ethernet length.
 func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected result) {
@@ -658,7 +634,11 @@ func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected r
 
 	check := func(b backend) func(*testing.T) {
 		return func(t *testing.T) {
-			if got := b(t, filter, in); got != expected {
+			got, err := b(filter, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != expected {
 				t.Fatalf("Got %q, expected %q", got, expected)
 			}
 		}
@@ -669,32 +649,9 @@ func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected r
 	t.Run("kernel", check(kernelBackend))
 }
 
-type XDPAction int
-
-func (r XDPAction) String() string {
-	switch r {
-	case XDPAborted:
-		return "XDPAborted"
-	case XDPDrop:
-		return "XDPDrop"
-	case XDPPass:
-		return "XDPPass"
-	case XDPTx:
-		return "XDPTx"
-	default:
-		return fmt.Sprintf("XDPResult(%d)", int(r))
-	}
-}
-
-const (
-	XDPAborted XDPAction = iota
-	XDPDrop
-	XDPPass
-	XDPTx
-)
-
+// TODO - deal with t.Short() / t.SkipNow()
 // testProg runs an eBPF program and checks it has not modified the packet
-func testProg(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte) result {
+/*func testProg(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte) Result {
 	// -short skips tests that require permissions
 	// Skipping the tests this late ensures the eBPF program still builds at least
 	if testing.Short() {
@@ -726,4 +683,4 @@ func testProg(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte) result {
 		tb.Fatalf("Unexpected XDP return code %v", r)
 		panic("unreachable")
 	}
-}
+}*/
