@@ -52,7 +52,7 @@ func Fuzz(data []byte) int {
 
 	kernelGot, kernelErr := kernelBackend(insns, pkt)
 	cGot, cErr := cBackend(insns, pkt)
-	ebpfGot, ebpfErr := cBackend(insns, pkt)
+	ebpfGot, ebpfErr := ebpfBackend(insns, pkt)
 
 	if ((kernelErr == nil) != (cErr == nil)) || ((kernelErr == nil) != (ebpfErr == nil)) {
 		panic(fmt.Sprintf("backend error disagree:\nkernel error: %v\n\nc error: %v\n\nebpf error: %v\n", kernelErr, cErr, ebpfErr))
