@@ -15,6 +15,7 @@ package cbpfc
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/pkg/errors"
@@ -195,6 +196,22 @@ func validateInstructions(insns []bpf.Instruction) error {
 				break
 			default:
 				return errors.Errorf("unsupported BPF extension %d: %v", pc, insn)
+			}
+
+		// TODO - is this the right places?
+		// Verifier ensures that no packet access offset is greater than 2^16
+		case bpf.LoadAbsolute:
+			if i.Off > math.MaxInt16 {
+				return errors.Errorf("LoadAbsolute offset %v too large", i.Off)
+			}
+		case bpf.LoadIndirect:
+			// TODO - This is checked dynamically at runtime!
+			if i.Off > math.MaxInt16 {
+				return errors.Errorf("LoadIndirect offset %v too large", i.Off)
+			}
+		case bpf.LoadMemShift:
+			if i.Off > math.MaxInt16 {
+				return errors.Errorf("LoadMemShift offset %v too large", i.Off)
 			}
 		}
 	}

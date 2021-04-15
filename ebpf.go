@@ -196,6 +196,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 	case bpf.LoadScratch:
 		return ebpfInsn(asm.LoadMem(opts.reg(i.Dst), asm.R10, opts.stackOffset(i.N), asm.Word))
 	case bpf.LoadAbsolute:
+		// TODO - this is already checked!
 		if i.Off > math.MaxInt16 {
 			return nil, errors.Errorf("LoadAbsolute offset %v too large", i.Off)
 		}
@@ -286,6 +287,10 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		)
 	case packetGuardIndirect:
 		return ebpfInsn(
+			// x < 0xFFFF - off
+			// Verifier overlolow checks - https://elixir.bootlin.com/linux/latest/source/kernel/bpf/verifier.c#L6798
+			asm.JGE.Imm(opts.regX, 0xFFFF-int32(i.guard), opts.label(noMatchLabel)),
+
 			// packet start + x
 			asm.Mov.Reg(opts.regIndirect, opts.PacketStart),
 			asm.Add.Reg(opts.regIndirect, opts.regX),

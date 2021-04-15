@@ -156,6 +156,16 @@ func TestLoadIndirect(t *testing.T) {
 	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, noMatch)
 }
 
+// crashers/0a4d6debd207bf1d33c818e07c62a79a73760397
+func TestLoadIndirectBigOffset(t *testing.T) {
+	// Offsets greater than 2^16 are noMatch
+	checkBackends(t, []bpf.Instruction{
+		bpf.LoadConstant{Dst: bpf.RegX, Val: 65530},
+		bpf.LoadIndirect{Off: 48, Size: 1},
+		bpf.RetA{},
+	}, []byte{}, noMatch)
+}
+
 // The 0 scratch slot is usable.
 func TestScratchZero(t *testing.T) {
 	t.Parallel()

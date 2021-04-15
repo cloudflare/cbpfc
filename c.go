@@ -194,7 +194,7 @@ func insnToC(insn instruction, blk *block) (string, error) {
 	case packetGuardAbsolute:
 		return stat("if (data + %d > data_end) return 0;", i.guard)
 	case packetGuardIndirect:
-		return stat("if (data + x + %d > data_end) return 0;", i.guard)
+		return stat("if (x > %d || data + x + %d > data_end) return 0;", 0xFFFF-int32(i.guard), i.guard)
 
 	case checkXNotZero:
 		return stat("if (x == 0) return 0;")
