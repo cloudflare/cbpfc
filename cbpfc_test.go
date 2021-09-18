@@ -1013,6 +1013,38 @@ func TestIndirectGuardClobber(t *testing.T) {
 	t.Run("memshift", check(bpf.LoadMemShift{Off: 2}))
 }
 
+// #20: we didn't always emit packet guards for the last instruction of a block.
+func TestIndirectGuardClobberLast(t *testing.T) {
+	insns := toInstructions([]bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadIndirect{Size: 4, Off: 10}, // guard 14
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 3, SkipTrue: 0, SkipFalse: 1}, // jump to block 1 or 2
+
+		// block 1
+		/* 2 */ bpf.LoadConstant{Dst: bpf.RegX, Val: 23},
+		// fall through to block 2
+
+		// block 2
+		/* 3 */ bpf.LoadIndirect{Size: 1, Off: 10}, // guard 11
+		/* 4 */ bpf.TXA{},
+		/* 5 */ bpf.RetA{},
+	})
+
+	blocks := mustSplitBlocks(t, 3, insns)
+
+	addIndirectPacketGuards(blocks)
+
+	matchBlock(t, blocks[0], join(
+		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+		insns[:2],
+	), nil)
+	matchBlock(t, blocks[1], insns[2:3], nil)
+	matchBlock(t, blocks[2], join(
+		[]instruction{{Instruction: packetGuardIndirect{guard: 11}}},
+		insns[3:],
+	), nil)
+}
+
 // Check we use parent guards if they're long / big enough
 func TestIndirectGuardParentsOK(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
