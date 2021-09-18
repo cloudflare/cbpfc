@@ -407,7 +407,7 @@ func addDivideByZeroGuards(blocks []*block) error {
 // addAbsolutePacketGuard adds required packet guards for absolute packet accesses to blocks.
 func addAbsolutePacketGuards(blocks []*block) {
 	addPacketGuards(blocks, packetGuardOpts{
-		requiredGuard: func(insns []instruction) (int, packetGuard) {
+		requiredGuard: func(insns []instruction) requiredGuard {
 			var biggestGuard packetGuard
 
 			for _, insn := range insns {
@@ -423,7 +423,11 @@ func addAbsolutePacketGuards(blocks []*block) {
 				}
 			}
 
-			return len(insns), biggestGuard
+			// Guard covers all instructions.
+			return requiredGuard{
+				guard:       biggestGuard,
+				alwaysValid: true,
+			}
 		},
 
 		createInsn: func(guard packetGuard) bpf.Instruction {
@@ -435,7 +439,7 @@ func addAbsolutePacketGuards(blocks []*block) {
 // addIndirectPacketGuard adds required packet guards for indirect packet accesses to blocks.
 func addIndirectPacketGuards(blocks []*block) {
 	addPacketGuards(blocks, packetGuardOpts{
-		requiredGuard: func(insns []instruction) (int, packetGuard) {
+		requiredGuard: func(insns []instruction) requiredGuard {
 			var (
 				insnCount    int
 				biggestGuard packetGuard
@@ -453,11 +457,17 @@ func addIndirectPacketGuards(blocks []*block) {
 
 				// Check if we clobbered x - this invalidates the guard
 				if memWrites(insn.Instruction).regs[bpf.RegX] {
-					break
+					return requiredGuard{
+						guard:         biggestGuard,
+						validForInsns: insnCount,
+					}
 				}
 			}
 
-			return insnCount, biggestGuard
+			return requiredGuard{
+				guard:       biggestGuard,
+				alwaysValid: true,
+			}
 		},
 
 		createInsn: func(guard packetGuard) bpf.Instruction {
@@ -467,15 +477,23 @@ func addIndirectPacketGuards(blocks []*block) {
 }
 
 type packetGuardOpts struct {
-	// requiredGuard returns:
-	// - the packetGuard needed by insns
-	// - the number of instructions in insns covered by the guard.
-	//   The guard is assumed to be invalidated for the remaining / uncovered insns (eg RegX was clobbered for indirect guards).
-	//   requiredGuard will be called until all instructions are covered.
-	requiredGuard func(insns []instruction) (int, packetGuard)
+	// requiredGuard returns the packetGuard needed by insns, and what insns it is valid for.
+	requiredGuard func(insns []instruction) requiredGuard
 
 	// createInsn creates an instruction that checks the packet length against the guard
 	createInsn func(guard packetGuard) bpf.Instruction
+}
+
+type requiredGuard struct {
+	guard packetGuard
+
+	// The guard covers all the requested instructions,
+	// and is still valid afterwards.
+	alwaysValid bool
+
+	// The guard covers n instructions,
+	// and isn't valid for the subsequent n+1: instructions (eg RegX was clobbered for indirect guards).
+	validForInsns int
 }
 
 // addPacketGuards adds packet guards as required.
@@ -500,45 +518,41 @@ func addPacketGuards(blocks []*block, opts packetGuardOpts) {
 
 // addBlockGuards add the guards required for the instructions in block.
 func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts) packetGuard {
-	// block insns with guards added
-	newInsns := []instruction{}
+	insns := block.insns
+	block.insns = nil
 
-	// Start of the current pseudo block in case guard is reset / invalidated
-	start := 0
-
-	for start < len(block.insns) {
-		// The guard has been reset for the next instructions
-		if start != 0 {
-			currentGuard = 0
-		}
-
-		insnsCovered, insnsGuard := opts.requiredGuard(block.insns[start:])
+	for len(insns) != 0 {
+		required := opts.requiredGuard(insns)
 
 		// Need a bigger guard for these insns
-		if insnsGuard != 0 && insnsGuard > currentGuard {
+		if required.guard != 0 && required.guard > currentGuard {
+			currentGuard = required.guard
 
 			// Last guard we need for this block -> what our children / target blocks will start with
-			if start+insnsCovered >= len(block.insns) {
-
+			if required.alwaysValid {
 				// If packets must go through a bigger guard (guaranteed guard) to match, we can use the guaranteed guard here,
 				// without changing the return value of the program:
 				//   - packets smaller than the guaranteed guard cannot match anyways, we can safely reject them earlier
 				//   - packets bigger than the guaranteed guard won't be affected by it
-				if guaranteed := guaranteedGuard(block.jumps, opts); guaranteed > insnsGuard {
-					insnsGuard = guaranteed
+				if guaranteed := guaranteedGuard(block.jumps, opts); guaranteed > required.guard {
+					currentGuard = guaranteed
 				}
 			}
 
-			currentGuard = insnsGuard
-
-			newInsns = append(newInsns, instruction{Instruction: opts.createInsn(insnsGuard)})
+			block.insns = append(block.insns, instruction{Instruction: opts.createInsn(currentGuard)})
 		}
 
-		newInsns = append(newInsns, block.insns[start:start+insnsCovered]...)
-		start += insnsCovered
-	}
+		// Guard covers remainder of block, and is still valid at the end.
+		if required.alwaysValid {
+			block.insns = append(block.insns, insns...)
+			return currentGuard
+		}
 
-	block.insns = newInsns
+		// Guard isn't valid anymore.
+		currentGuard = 0
+		block.insns = append(block.insns, insns[:required.validForInsns]...)
+		insns = insns[required.validForInsns:]
+	}
 
 	return currentGuard
 }
@@ -578,23 +592,21 @@ func guaranteedGuardCached(targets map[pos]*block, opts packetGuardOpts, cache m
 			continue
 		}
 
-		insnsCovered, insnsGuard := opts.requiredGuard(target.insns)
+		required := opts.requiredGuard(target.insns)
 
 		// Guard invalidated by block, stop exploring
-		if insnsCovered < len(target.insns) {
-			targetGuards = append(targetGuards, insnsGuard)
+		if !required.alwaysValid {
+			targetGuards = append(targetGuards, required.guard)
 			continue
 		}
 
-		guaranteed := guaranteedGuardCached(target.jumps, opts, cache)
-
-		if guaranteed > insnsGuard {
-			insnsGuard = guaranteed
+		guard := required.guard
+		if guaranteed := guaranteedGuardCached(target.jumps, opts, cache); guaranteed > required.guard {
+			guard = guaranteed
 		}
 
-		cache[target] = insnsGuard
-
-		targetGuards = append(targetGuards, insnsGuard)
+		cache[target] = guard
+		targetGuards = append(targetGuards, guard)
 	}
 
 	return leastGuard(targetGuards)
