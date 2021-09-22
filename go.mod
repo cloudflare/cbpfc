@@ -1,10 +1,10 @@
 module github.com/cloudflare/cbpfc
 
 require (
-	github.com/cilium/ebpf v0.1.0
+	github.com/cilium/ebpf v0.6.2
 	github.com/pkg/errors v0.9.1
-	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b
-	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
+	golang.org/x/net v0.0.0-20210917221730-978cfadd31cf
+	golang.org/x/sys v0.0.0-20210921065528-437939a70204
 )
 
-go 1.14
+go 1.16
