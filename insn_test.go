@@ -133,6 +133,31 @@ func TestLoadAbsolute(t *testing.T) {
 	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, noMatch)
 }
 
+func TestLoadAbsoluteBigOffset(t *testing.T) {
+	t.Parallel()
+
+	// XDP limits packets to one page, so there's no way to feed a packet big enough to test the offsets
+	// we want through BPF_PROG_TEST_RUN.
+	// All we can check is that the verifier accepts the program and it doesn't match.
+	filter := func(load bpf.Instruction) []bpf.Instruction {
+		return []bpf.Instruction{
+			load,
+			bpf.ALUOpConstant{Op: bpf.ALUOpAdd, Val: 2},
+			bpf.RetA{},
+		}
+	}
+
+	checkBackends(t, filter(bpf.LoadAbsolute{Off: maxPacketOffset - 1, Size: 1}), nil, noMatch)
+	checkBackends(t, filter(bpf.LoadAbsolute{Off: maxPacketOffset, Size: 1}), nil, noMatch)
+	checkBackends(t, filter(bpf.LoadAbsolute{Off: maxPacketOffset - 2, Size: 2}), nil, noMatch)
+	checkBackends(t, filter(bpf.LoadAbsolute{Off: maxPacketOffset - 1, Size: 2}), nil, noMatch)
+	checkBackends(t, filter(bpf.LoadAbsolute{Off: maxPacketOffset - 4, Size: 4}), nil, noMatch)
+	checkBackends(t, filter(bpf.LoadAbsolute{Off: maxPacketOffset - 3, Size: 4}), nil, noMatch)
+
+	checkBackends(t, filter(bpf.LoadMemShift{Off: maxPacketOffset - 1}), nil, noMatch)
+	checkBackends(t, filter(bpf.LoadMemShift{Off: maxPacketOffset}), nil, noMatch)
+}
+
 func TestLoadIndirect(t *testing.T) {
 	t.Parallel()
 

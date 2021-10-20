@@ -36,6 +36,23 @@ func TestRaw(t *testing.T) {
 	requireError(t, err, "unsupported instruction 0:")
 }
 
+// Absolute / constant loads can't use negative offsets, they're for extensions.
+func TestLoadAbsoluteNegativeOffset(t *testing.T) {
+	off := (^uint32(1)) + 1 // -1
+
+	for _, insn := range []bpf.Instruction{
+		bpf.LoadAbsolute{Off: off, Size: 1},
+		bpf.LoadMemShift{Off: off},
+	} {
+		_, err := compile([]bpf.Instruction{
+			insn,
+			bpf.RetA{},
+		})
+
+		requireError(t, err, "negative offset -1")
+	}
+}
+
 func TestExtension(t *testing.T) {
 	// No extensions > 256 right now
 	for i := 0; i < 256; i++ {
@@ -788,6 +805,95 @@ func TestDivisionByZeroParentsNOK(t *testing.T) {
 
 	test(t, bpf.ALUOpDiv)
 	test(t, bpf.ALUOpMod)
+}
+
+func TestRewriteLargePacketOffsets(t *testing.T) {
+	testOK := func(t *testing.T, load bpf.Instruction) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			load,
+			bpf.RetA{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+		rewriteLargePacketOffsets(&blocks)
+
+		matchBlock(t, blocks[0], insns, nil)
+	}
+
+	testOOB := func(t *testing.T, load bpf.Instruction) {
+		t.Helper()
+
+		insns := toInstructions([]bpf.Instruction{
+			load,
+			bpf.RetA{},
+		})
+
+		blocks := mustSplitBlocks(t, 1, insns)
+		rewriteLargePacketOffsets(&blocks)
+
+		matchBlock(t, blocks[0], []instruction{
+			{Instruction: bpf.RetConstant{}},
+		}, nil)
+	}
+
+	testOK(t, bpf.LoadAbsolute{Size: 1, Off: 65534})
+	testOOB(t, bpf.LoadAbsolute{Size: 1, Off: 65535})
+	testOK(t, bpf.LoadAbsolute{Size: 2, Off: 65533})
+	testOOB(t, bpf.LoadAbsolute{Size: 2, Off: 65534})
+	testOK(t, bpf.LoadAbsolute{Size: 4, Off: 65531})
+	testOOB(t, bpf.LoadAbsolute{Size: 4, Off: 65532})
+
+	testOK(t, bpf.LoadMemShift{Off: 65534})
+	testOOB(t, bpf.LoadMemShift{Off: 65535})
+}
+
+// Test unreachable blocks due to large packet offsets are removed.
+func TestRewriteLargePacketOffsetsDeadBlock(t *testing.T) {
+	filter := []bpf.Instruction{
+		// block 0
+		/* 0 */ bpf.LoadAbsolute{Size: 4, Off: 2},
+		/* 1 */ bpf.JumpIf{Cond: bpf.JumpGreaterThan, Val: 2, SkipTrue: 6}, // jump to block 1 or 6
+
+		// block 1
+		/* 2 */ bpf.JumpIf{Cond: bpf.JumpLessThan, Val: 2, SkipTrue: 3}, // jump to block 2 or 3
+
+		// block 2
+		/* 3 */ bpf.LoadAbsolute{Size: 1, Off: 65598},
+		/* 4 */ bpf.ALUOpConstant{Op: bpf.ALUOpMul, Val: 4},
+		/* 5 */ bpf.Jump{Skip: 1}, // jump to block 4
+
+		// block 3
+		/* 6 */ bpf.LoadAbsolute{Size: 4, Off: 65532},
+
+		// block 4
+		/* 7 */ bpf.ALUOpConstant{Op: bpf.ALUOpAdd, Val: 2},
+
+		// block 5
+		/* 8 */ bpf.RetA{},
+	}
+	insns := toInstructions(filter)
+
+	blocks := mustSplitBlocks(t, 6, insns)
+	rewriteLargePacketOffsets(&blocks)
+	if len(blocks) != 5 {
+		t.Fatalf("expected 5 blocks, got %v", blocks)
+	}
+
+	matchBlock(t, blocks[0], insns[0:2], nil)
+	matchBlock(t, blocks[1], insns[2:3], nil)
+	matchBlock(t, blocks[2], []instruction{
+		{Instruction: bpf.RetConstant{}},
+	}, nil)
+	matchBlock(t, blocks[3], []instruction{
+		{Instruction: bpf.RetConstant{}},
+	}, nil)
+	// block 4 is unreachable and removed, block 5 replaces it
+	matchBlock(t, blocks[4], insns[8:], nil)
+
+	// Make sure this is accepted by the verifier.
+	checkBackends(t, filter, []byte{}, noMatch)
 }
 
 // Test absolute guards
