@@ -21,6 +21,10 @@ import (
 	"golang.org/x/net/bpf"
 )
 
+// maxPacketOffset is the maximum packet offset the verifier allows.
+// https://elixir.bootlin.com/linux/v5.14.8/source/kernel/bpf/verifier.c#L3223
+const maxPacketOffset = 0xFFFF
+
 // Map conditionals to their inverse
 var condToInverse = map[bpf.JumpTest]bpf.JumpTest{
 	bpf.JumpEqual:          bpf.JumpNotEqual,
@@ -164,6 +168,8 @@ func compile(insns []bpf.Instruction) ([]*block, error) {
 		return nil, err
 	}
 
+	rewriteLargePacketOffsets(&blocks)
+
 	// Guard packet loads
 	addAbsolutePacketGuards(blocks)
 	addIndirectPacketGuards(blocks)
@@ -188,6 +194,17 @@ func validateInstructions(insns []bpf.Instruction) error {
 		switch i := insn.(type) {
 		case bpf.RawInstruction:
 			return errors.Errorf("unsupported instruction %d: %v", pc, insn)
+
+		// Negative constant offsets are used for extensions (and if they're supported, x/net/bpf will parse them)
+		// and other packet addressing modes we don't support: https://elixir.bootlin.com/linux/v5.14.10/source/kernel/bpf/core.c#L65
+		case bpf.LoadAbsolute:
+			if int32(i.Off) < 0 {
+				return errors.Errorf("LoadAbsolute negative offset %v", int32(i.Off))
+			}
+		case bpf.LoadMemShift:
+			if int32(i.Off) < 0 {
+				return errors.Errorf("LoadMemShift negative offset %v", int32(i.Off))
+			}
 
 		case bpf.LoadExtension:
 			switch i.Num {
@@ -402,6 +419,71 @@ func addDivideByZeroGuards(blocks []*block) error {
 	}
 
 	return nil
+}
+
+// rewriteLargePacketOffsets replaces packet loads that have constant offsets
+// greater than the verifier allows with return 0 (no match) to mimick
+// what the kernel does for cBPF.
+// While cBPF allows bigger offsets, in practice they cannot match a packet.
+// This doesn't work for LoadIndirect as the actual offset is LoadIndirect.Off + RegX,
+// we instead rely on runtime checks (see packetGuardIndirect).
+func rewriteLargePacketOffsets(blocks *[]*block) {
+	// All blocks are reachable when we start.
+	// But some blocks can become unreachable once we've rewritten load instructions to returns.
+	// The verifier rejects unreachable instructions, track how many other blocks go to a given block
+	// so we can remove newly unreachable blocks.
+	blockRefs := make(map[*block]int)
+
+	var newBlocks []*block
+
+	for i, block := range *blocks {
+		// No other blocks jump into this block anymore, skip it.
+		if i != 0 && blockRefs[block] == 0 {
+			continue
+		}
+		newBlocks = append(newBlocks, block)
+
+		for _, insn := range block.insns {
+			var (
+				offset uint32
+				size   int
+			)
+
+			// LoadIndirect is handled by runtime checks as only RegX + offset is subject to maxPacketOffset.
+			switch i := insn.Instruction.(type) {
+			case bpf.LoadAbsolute:
+				offset = i.Off
+				size = i.Size
+			case bpf.LoadMemShift:
+				offset = i.Off
+				size = 1
+			default:
+				continue
+			}
+
+			// A packetGuard will have to add size to the packet pointer, so it counts towards the limit.
+			// We've already validate offset isn't signed, so this can't overflow.
+			if offset+uint32(size) > maxPacketOffset {
+				// Mimick an out of bounds load in cBPF, returning 0 / no match.
+				// The block now unconditionally returns, the other instructions in it don't matter.
+				block.insns = []instruction{
+					{Instruction: bpf.RetConstant{Val: 0}},
+				}
+
+				// This block doesn't jump to any others anymore.
+				block.jumps = nil
+
+				break
+			}
+		}
+
+		// cBPF can't jump backwards, so we can build this up as we go.
+		for _, target := range block.jumps {
+			blockRefs[target]++
+		}
+	}
+
+	*blocks = newBlocks
 }
 
 // addAbsolutePacketGuard adds required packet guards for absolute packet accesses to blocks.

@@ -195,33 +195,30 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		return ebpfInsn(asm.Mov.Imm32(opts.reg(i.Dst), int32(i.Val)))
 	case bpf.LoadScratch:
 		return ebpfInsn(asm.LoadMem(opts.reg(i.Dst), asm.R10, opts.stackOffset(i.N), asm.Word))
+
 	case bpf.LoadAbsolute:
-		if i.Off > math.MaxInt16 {
-			return nil, errors.Errorf("LoadAbsolute offset %v too large", i.Off)
-		}
+		return packetLoad(opts, opts.PacketStart, i.Off, i.Size, func(src asm.Register, offset int16, size asm.Size) asm.Instructions {
+			return appendNtoh(opts.regA, size,
+				asm.LoadMem(opts.regA, src, offset, size),
+			)
+		})
 
-		return appendNtoh(opts.regA, sizeToEBPF[i.Size],
-			asm.LoadMem(opts.regA, opts.PacketStart, int16(i.Off), sizeToEBPF[i.Size]),
-		)
 	case bpf.LoadIndirect:
-		if i.Off > math.MaxInt16 {
-			return nil, errors.Errorf("LoadIndirect offset %v too large", i.Off)
-		}
+		// last packet guard set opts.regIndirect to packetstart + x
+		return packetLoad(opts, opts.regIndirect, i.Off, i.Size, func(src asm.Register, offset int16, size asm.Size) asm.Instructions {
+			return appendNtoh(opts.regA, size,
+				asm.LoadMem(opts.regA, src, offset, size),
+			)
+		})
 
-		return appendNtoh(opts.regA, sizeToEBPF[i.Size],
-			// last packet guard set opts.regIndirect to packetstart + x
-			asm.LoadMem(opts.regA, opts.regIndirect, int16(i.Off), sizeToEBPF[i.Size]),
-		)
 	case bpf.LoadMemShift:
-		if i.Off > math.MaxInt16 {
-			return nil, errors.Errorf("LoadMemShift offset %v too large", i.Off)
-		}
-
-		return ebpfInsn(
-			asm.LoadMem(opts.regX, opts.PacketStart, int16(i.Off), asm.Byte),
-			asm.And.Imm32(opts.regX, 0xF), // clear upper 4 bits
-			asm.LSh.Imm32(opts.regX, 2),   // 32bit words to bytes
-		)
+		return packetLoad(opts, opts.PacketStart, i.Off, 1, func(src asm.Register, offset int16, size asm.Size) asm.Instructions {
+			return []asm.Instruction{
+				asm.LoadMem(opts.regX, src, offset, size),
+				asm.And.Imm32(opts.regX, 0xF), // clear upper 4 bits
+				asm.LSh.Imm32(opts.regX, 2),   // 32bit words to bytes
+			}
+		})
 
 	case bpf.StoreScratch:
 		return ebpfInsn(asm.StoreMem(asm.R10, opts.stackOffset(i.N), opts.reg(i.Src), asm.Word))
@@ -301,15 +298,31 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 	default:
 		return nil, errors.Errorf("unsupported instruction %v", insn)
 	}
+
 }
 
-func appendNtoh(reg asm.Register, size asm.Size, insns ...asm.Instruction) (asm.Instructions, error) {
+type packetRead func(src asm.Register, offset int16, size asm.Size) asm.Instructions
+
+func packetLoad(opts ebpfOpts, src asm.Register, offset uint32, size int, makeRead packetRead) (asm.Instructions, error) {
+	// cBPF supports 32 bit signed offsets, but eBPF only 16 bit natively.
+	if int32(offset) > math.MaxInt16 || int32(offset) < math.MinInt16 {
+		return append(asm.Instructions{
+			asm.Mov.Reg(opts.regTmp, src),
+			// cBPF offsets are signed, casting to int32 is safe.
+			asm.Add.Imm(opts.regTmp, int32(offset)),
+		}, makeRead(opts.regTmp, 0, sizeToEBPF[size])...), nil
+	}
+
+	return makeRead(src, int16(offset), sizeToEBPF[size]), nil
+}
+
+func appendNtoh(reg asm.Register, size asm.Size, insns ...asm.Instruction) asm.Instructions {
 	if size == asm.Byte {
-		return insns, nil
+		return insns
 	}
 
 	// BPF_FROM_BE should be a nop on big endian architectures
-	return append(insns, asm.HostTo(asm.BE, reg, size)), nil
+	return append(insns, asm.HostTo(asm.BE, reg, size))
 }
 
 func condToEBPF(opts ebpfOpts, skipTrue, skipFalse skip, blk *block, cond bpf.JumpTest, insn func(jo asm.JumpOp, label string) asm.Instructions) (asm.Instructions, error) {
