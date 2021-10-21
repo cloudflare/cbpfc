@@ -18,7 +18,10 @@ char __license[] __section("license") = "BSD";
 
 // Shim out all the definitions required by cbpfc
 // Real programs should use the proper headers
+typedef unsigned long long uint64_t;
+typedef long long int64_t;
 typedef unsigned int uint32_t;
+typedef int int32_t;
 typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 

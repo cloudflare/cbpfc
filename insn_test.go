@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"testing"
 
@@ -161,27 +162,150 @@ func TestLoadAbsoluteBigOffset(t *testing.T) {
 func TestLoadIndirect(t *testing.T) {
 	t.Parallel()
 
-	filter := func(val uint32, size int) []bpf.Instruction {
+	// With a constant RegX, the verifier knows it's exact value.
+	t.Run("constant_valid", func(t *testing.T) {
+		filter := func(regX int32, off int32, size int, val uint32) []bpf.Instruction {
+			return []bpf.Instruction{
+				bpf.LoadConstant{Dst: bpf.RegX, Val: uint32(regX)},
+				bpf.LoadIndirect{Off: uint32(off), Size: size},
+				bpf.JumpIf{Cond: bpf.JumpEqual, Val: val, SkipTrue: 1},
+				bpf.RetConstant{Val: 0},
+				bpf.RetConstant{Val: 1},
+			}
+		}
+
+		// RegX: INT32_MIN+4, Off: INT32_MAX, Size: 1
+		checkBackends(t, filter(math.MinInt32+4, math.MaxInt32, 1, 5), []byte{0, 0, 0, 5}, match)
+		checkBackends(t, filter(math.MinInt32+4, math.MaxInt32, 1, 6), []byte{0, 0, 0, 5}, noMatch)
+
+		// RegX: 3, Off: -1, Size: 2
+		checkBackends(t, filter(3, -1, 2, 0xDEAD), []byte{0, 0, 0xDE, 0xAD}, match)
+		checkBackends(t, filter(3, -1, 2, 0xDEAD), []byte{0, 0, 0xDE, 0xAF}, noMatch)
+
+		// RegX: 1, Off: 2, Size: 4
+		checkBackends(t, filter(1, 2, 4, 0xDEADBEEF), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, match)
+		checkBackends(t, filter(1, 2, 4, 0xDEADBEEF), []byte{0, 0, 0, 0xDE, 0xAA, 0xBE, 0xEF}, noMatch)
+	})
+
+	// But with a variable RegX, the verifier only has whatever checks we perform.
+	t.Run("variable_valid", func(t *testing.T) {
+		filter := func(off int32, size int, val uint32) []bpf.Instruction {
+			return []bpf.Instruction{
+				bpf.LoadAbsolute{Off: 0, Size: 4},
+				bpf.TAX{},
+				bpf.LoadIndirect{Off: uint32(off), Size: size},
+				bpf.JumpIf{Cond: bpf.JumpEqual, Val: val, SkipTrue: 1},
+				bpf.RetConstant{Val: 0},
+				bpf.RetConstant{Val: 1},
+			}
+		}
+
+		// RegX: -6, Off: 13, Size: 1
+		checkBackends(t, filter(13, 1, 5), []byte{0xFF, 0xFF, 0xFF, 0xFA, 0, 0, 0, 5}, match)
+		checkBackends(t, filter(13, 1, 6), []byte{0xFF, 0xFF, 0xFF, 0xFA, 0, 0, 0, 5}, noMatch)
+
+		// RegX: INT32_MAX, Off: INT32_MIN+7, Size: 2
+		checkBackends(t, filter(math.MinInt32+7, 2, 0xDEAD), []byte{0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0xDE, 0xAD}, match)
+		checkBackends(t, filter(math.MinInt32+7, 2, 0xDEAD), []byte{0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0xDE, 0xAF}, noMatch)
+
+		// RegX: 3, Off: 4, Size: 4
+		checkBackends(t, filter(4, 4, 0xDEADBEEF), []byte{0x00, 0x00, 0x00, 0x03, 0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, match)
+		checkBackends(t, filter(4, 4, 0xDEADBEEF), []byte{0x00, 0x00, 0x00, 0x03, 0, 0, 0, 0xDE, 0xAA, 0xBE, 0xEF}, noMatch)
+	})
+
+	t.Run("constant_outofbounds", func(t *testing.T) {
+		// Always return match to ensure noMatch comes from the packet load.
+		filter := func(regX, off int32, size int) []bpf.Instruction {
+			return []bpf.Instruction{
+				bpf.LoadConstant{Dst: bpf.RegX, Val: uint32(regX)},
+				bpf.LoadIndirect{Off: uint32(off), Size: size},
+				bpf.RetConstant{Val: 1},
+			}
+		}
+
+		// Not out of bounds, sanity check
+		checkBackends(t, filter(-3, 3, 1), nil, match)
+
+		// Before packet
+		// RegX: -16, Off: 15
+		checkBackends(t, filter(-16, 15, 1), nil, noMatch)
+		// RegX: -1, Off: -2
+		checkBackends(t, filter(-1, -2, 4), nil, noMatch)
+		// RegX: 255, Off: -300
+		checkBackends(t, filter(255, -300, 2), nil, noMatch)
+
+		// After packet
+		checkBackends(t, filter(-16, 30, 1), nil, noMatch)
+	})
+
+	t.Run("variable_outofbounds", func(t *testing.T) {
+		// Always return match to ensure noMatch comes from the packet load.
+		filter := func(off int32, size int) []bpf.Instruction {
+			return []bpf.Instruction{
+				bpf.LoadAbsolute{Off: 0, Size: 4},
+				bpf.TAX{},
+				bpf.LoadIndirect{Off: uint32(off), Size: size},
+				bpf.RetConstant{Val: 1},
+			}
+		}
+
+		// Not out of bounds, sanity check
+		checkBackends(t, filter(3, 1), []byte{0xFF, 0xFF, 0xFF, 0xFD}, match)
+
+		// Before packet
+		// RegX: -16, Off: 15
+		checkBackends(t, filter(15, 1), []byte{0xFF, 0xFF, 0xFF, 0xF0}, noMatch)
+		// RegX: -1, Off: -2
+		checkBackends(t, filter(-2, 4), []byte{0xFF, 0xFF, 0xFF, 0xFF}, noMatch)
+		// RegX: 255, Off: -300
+		checkBackends(t, filter(-300, 2), []byte{0x00, 0x00, 0x00, 0xFF}, noMatch)
+
+		// After packet
+		checkBackends(t, filter(30, 1), []byte{0xFF, 0xFF, 0xFF, 0xF0}, noMatch)
+	})
+}
+
+func TestLoadIndirectBigOffset(t *testing.T) {
+	filter := func(off uint32, size int) []bpf.Instruction {
 		return []bpf.Instruction{
-			bpf.LoadConstant{Dst: bpf.RegX, Val: 1},
-			bpf.LoadIndirect{Off: 2, Size: size},
-			bpf.JumpIf{Cond: bpf.JumpEqual, Val: val, SkipTrue: 1},
-			bpf.RetConstant{Val: 0},
-			bpf.RetConstant{Val: 1},
+			// RegX is 0 initialized
+			bpf.LoadIndirect{Off: off, Size: size},
+			bpf.ALUOpConstant{Op: bpf.ALUOpAdd, Val: 2},
+			bpf.RetA{},
 		}
 	}
 
-	// 1
-	checkBackends(t, filter(5, 1), []byte{0, 0, 0, 5}, match)
-	checkBackends(t, filter(6, 1), []byte{0, 0, 0, 5}, noMatch)
+	// XDP limits packets to one page, so there's no way to feed a packet big enough to test the offsets
+	// we want through BPF_PROG_TEST_RUN.
+	// All we can check is that the verifier accepts the program and it doesn't match.
+	checkBackends(t, filter(0, 1), nil, match)
+	checkBackends(t, filter(0, 4), nil, match)
 
-	// 2
-	checkBackends(t, filter(0xDEAD, 2), []byte{0, 0, 0, 0xDE, 0xAD}, match)
-	checkBackends(t, filter(0xDEAF, 2), []byte{0, 0, 0, 0xDE, 0xAD}, noMatch)
+	checkBackends(t, filter(maxPacketOffset-1, 1), nil, noMatch)
+	checkBackends(t, filter(maxPacketOffset, 1), nil, noMatch)
 
-	// 4
-	checkBackends(t, filter(0xDEADBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, match)
-	checkBackends(t, filter(0xDEAFBEEF, 4), []byte{0, 0, 0, 0xDE, 0xAD, 0xBE, 0xEF}, noMatch)
+	checkBackends(t, filter(maxPacketOffset-2, 2), nil, noMatch)
+	checkBackends(t, filter(maxPacketOffset-1, 2), nil, noMatch)
+
+	checkBackends(t, filter(maxPacketOffset-4, 4), nil, noMatch)
+	checkBackends(t, filter(maxPacketOffset-3, 4), nil, noMatch)
+}
+
+// Indirect offset that would cause packetGuardIndirect.length() to overflow.
+func TestLoadIndirectGuardOverflow(t *testing.T) {
+	var min int32 = math.MinInt32
+
+	checkBackends(t, []bpf.Instruction{
+		// Variable RegX
+		bpf.LoadAbsolute{Off: 0, Size: 4},
+		bpf.TAX{},
+		// Two loads, with offsets more than maxPacketOffset apart
+		bpf.LoadIndirect{Off: uint32(min), Size: 1},
+		bpf.LoadIndirect{Off: 0, Size: 2},
+		bpf.LoadIndirect{Off: math.MaxInt32, Size: 4},
+		bpf.TXA{},
+		bpf.RetA{},
+	}, nil, noMatch)
 }
 
 // The 0 scratch slot is usable.
@@ -370,6 +494,19 @@ func TestALUDivZero(t *testing.T) {
 
 	checkBackends(t, filter, []byte{0}, noMatch)
 	checkBackends(t, filter, []byte{1}, match)
+}
+
+// Check that ALU operations aren't signed.
+// The only operator that is implemented differently for signed vs unsigned math with two's complement is division.
+func TestALUDivNegative(t *testing.T) {
+	checkBackends(t, []bpf.Instruction{
+		bpf.LoadConstant{Dst: bpf.RegA, Val: 0x00000004}, // 4
+		bpf.LoadConstant{Dst: bpf.RegX, Val: 0xFFFFFFFE}, // -2
+		bpf.ALUOpX{Op: bpf.ALUOpDiv},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0, SkipTrue: 1}, // 0 means division is unsigned, -2 signed
+		bpf.RetConstant{},
+		bpf.RetConstant{Val: 1},
+	}, nil, match)
 }
 
 func TestALUOr(t *testing.T) {
@@ -726,7 +863,9 @@ func testProg(tb testing.TB, progSpec *ebpf.ProgramSpec, in []byte) result {
 		tb.SkipNow()
 	}
 
-	prog, err := ebpf.NewProgram(progSpec)
+	prog, err := ebpf.NewProgramWithOptions(progSpec, ebpf.ProgramOptions{
+		LogLevel: 2, // Get full verifier logs.
+	})
 	if err != nil {
 		tb.Fatal(err)
 	}
