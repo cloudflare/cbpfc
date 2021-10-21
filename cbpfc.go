@@ -111,6 +111,9 @@ type packetGuard interface {
 
 	// Restrict returns a guard that is the intersection of the current guard and o.
 	restrict(o packetGuard) packetGuard
+
+	// Adjust any instructions that are covered by this guard as required.
+	adjustInsns(insns []instruction)
 }
 
 // packetGuardAbsolute checks packet bounds for absolute packet loads (constant offset).
@@ -145,35 +148,135 @@ func (a packetGuardAbsolute) restrict(o packetGuard) packetGuard {
 	return n
 }
 
+// We don't need to adjust instructions for absolute guards.
+func (a packetGuardAbsolute) adjustInsns(insns []instruction) {}
+
 // Assemble implements the Instruction Assemble method.
 func (p packetGuardAbsolute) Assemble() (bpf.RawInstruction, error) {
 	return bpf.RawInstruction{}, errors.Errorf("unsupported")
 }
 
 // packetGuardIndirect checks packet bounds for indirect packet loads (RegX + constant offset).
+// RegX and offset are both allowed to be negative, but RegX + Offset must be >= 0 (the verifier does not allow
+// adding negative offsets to packet pointers).
+//
+// This requires tracking both the first and last byte read (relative to RegX) to check:
+//  - RegX + start >= 0
+//  - RegX + end < maxPacketOffset
+//  - packet_start + RegX + end < packet_end
+//
+// Bounds / range information is propagated in the verifier by copying a packet pointer,
+// adding a constant (which yields a "derived" packet pointer with the same ID), and checking it against the packet_end.
+// Subsequent LoadIndirects that are covered by this guard need to use a packet pointer with same ID as the guard to
+// take advantage of the bounds.
+// Ideally we would use packet_start + RegX and let each LoadIndirect instruction add its own offset,
+// but the verifier doesn't allow the use of packet pointers with a negative offset (even if the offset
+// would make the read positive: https://elixir.bootlin.com/linux/v5.14.12/source/kernel/bpf/verifier.c#L3287)
+//
+// So instead we check:
+//  - RegX + start >= 0
+//  - RegX + start < maxPacketOffset - length
+//  - packet_start + RegX + start + length < packet_end
+// This lets us reuse packet_start + RegX + start as the packet pointer for LoadIndirect,
+// but means we need to rewrite the offsets of LoadIndirect instructions covered by this guard to subtract length.
 type packetGuardIndirect struct {
-	// The furthest (exclusive) byte read.
-	end int32
+	// First byte read (inclusive).
+	start int32
+	// Last byte read (exclusive).
+	// int64 to avoid overflows with INT32_MAX + size
+	end int64
 }
 
 func newPacketGuardIndirect(off uint32, size int) packetGuardIndirect {
-	return packetGuardIndirect{int32(off) + int32(size)}
+	// cBPF offsets are uint32, but are signed in reality
+	// LoadIndirect offsets are encoded as uint32 by x/net/bpf, but are signed in reality.
+	// Unlike LoadAbsolute, restrictions only apply to RegX + Offset and not Offset alone,
+	// so we have to allow INT32_MAX / INT32_MIN offsets.
+	return packetGuardIndirect{
+		start: int32(off),
+		end:   int64(int32(off)) + int64(size),
+	}
 }
 
 func (a packetGuardIndirect) extend(o packetGuard) packetGuard {
+	b := o.(packetGuardIndirect)
+
+	// A 0 guard means no guard, we shouldn't extend it to cover {0,0}
+	if a == (packetGuardIndirect{}) {
+		return b
+	}
+	if b == (packetGuardIndirect{}) {
+		return a
+	}
+
 	n := a
-	if b := o.(packetGuardIndirect); b.end > a.end {
+
+	if b.start < a.start {
+		n.start = b.start
+	}
+	if b.end > a.end {
 		n.end = b.end
 	}
+
 	return n
 }
 
 func (a packetGuardIndirect) restrict(o packetGuard) packetGuard {
+	b := o.(packetGuardIndirect)
+
+	// A 0 guard means no guard, that restricts everything to no guard.
+	if a == (packetGuardIndirect{}) || b == (packetGuardIndirect{}) {
+		return packetGuardIndirect{}
+	}
+
 	n := a
-	if b := o.(packetGuardIndirect); b.end < a.end {
+
+	if b.start > a.start {
+		n.start = b.start
+	}
+	if b.end < a.end {
 		n.end = b.end
 	}
+
 	return n
+}
+
+// int32(RegX) + p.start must be < to maxStartOffset().
+// This checks that it is positive, and int32(RegX) + p.end doesn't exceed maxPacketOffset.
+// Returns 0 (check will always be false) if there is no way for the start and end of the guard to be < maxPacketOffset.
+func (p packetGuardIndirect) maxStartOffset() int32 {
+	length := p.end - int64(p.start)
+	// If length exceeds maxPacketOffset, there's no way for RegX + start >= 0 and RegX + end < maxPacketOffset.
+	// Return 0 so the check fails, and we return noMatch.
+	if length > maxPacketOffset {
+		return 0
+	}
+
+	// +1 as it needs to be strictly less than.
+	// This lets us return 0 above to get noMatch.
+	return int32(maxPacketOffset) - int32(length) + 1
+}
+
+// packet_start + (int32(x) + p.start) + p.length() must be <= packet_end.
+// This lets us reuse the (int32(x) + p.start) from the maxStartOffset() check, to keep the bounds info.
+func (p packetGuardIndirect) length() int32 {
+	// This can overflow, but it doesn't matter as we'll already have checked maxStartOffset()
+	// and caught the overflow there.
+	return int32(p.end - int64(p.start))
+}
+
+// Once we've determined the guard that applies for a given set of insns,
+// asjust the offsets so they're relative to the smallest / start of the guard.
+func (p packetGuardIndirect) adjustInsns(insns []instruction) {
+	for i := range insns {
+		switch insn := insns[i].Instruction.(type) {
+		case bpf.LoadIndirect:
+			insns[i].Instruction = bpf.LoadIndirect{
+				Off:  uint32(int32(insn.Off) - p.start),
+				Size: insn.Size,
+			}
+		}
+	}
 }
 
 // Assemble implements the Instruction Assemble method.
@@ -672,16 +775,22 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 			block.insns = append(block.insns, instruction{Instruction: currentGuard})
 		}
 
-		// Guard covers remainder of block, and is still valid at the end.
-		if required.alwaysValid {
-			block.insns = append(block.insns, insns...)
-			return currentGuard
+		coveredInsns := insns
+		if !required.alwaysValid {
+			coveredInsns = insns[:required.validForInsns]
 		}
 
-		// Guard isn't valid anymore.
-		currentGuard = opts.zeroGuard()
-		block.insns = append(block.insns, insns[:required.validForInsns]...)
-		insns = insns[required.validForInsns:]
+		currentGuard.adjustInsns(coveredInsns)
+		block.insns = append(block.insns, coveredInsns...)
+
+		if required.alwaysValid {
+			// Guard covers remainder of block, and is still valid at the end.
+			return currentGuard
+		} else {
+			// Guard isn't valid anymore.
+			currentGuard = opts.zeroGuard()
+			insns = insns[required.validForInsns:]
+		}
 	}
 
 	return currentGuard

@@ -283,12 +283,22 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 		)
 	case packetGuardIndirect:
 		return ebpfInsn(
-			// packet start + x
-			asm.Mov.Reg(opts.regIndirect, opts.PacketStart),
-			asm.Add.Reg(opts.regIndirect, opts.regX),
+			// Sign extend RegX to 64bits so we can do signed ALU operations.
+			asm.Mov.Reg(opts.regIndirect, opts.regX),
+			asm.LSh.Imm(opts.regIndirect, 32),
+			asm.ArSh.Imm(opts.regIndirect, 32),
+
+			// Check maxStartOffset()
+			asm.Add.Imm(opts.regIndirect, i.start),
+			asm.JGE.Imm(opts.regIndirect, i.maxStartOffset(), opts.label(noMatchLabel)),
+
+			// packet_start + signed x + start
+			// This will have a smin_value >= 0
+			asm.Add.Reg(opts.regIndirect, opts.PacketStart),
+
 			// different reg (so actual load picks offset), but same verifier context id
 			asm.Mov.Reg(opts.regTmp, opts.regIndirect),
-			asm.Add.Imm(opts.regTmp, i.end),
+			asm.Add.Imm(opts.regTmp, i.length()),
 			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.label(noMatchLabel)),
 		)
 

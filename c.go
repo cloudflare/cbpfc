@@ -16,6 +16,8 @@ static inline
 uint32_t {{.Name}}(const uint8_t *const data, const uint8_t *const data_end) {
 	__attribute__((unused))
 	uint32_t a, x, m[16];
+	__attribute__((unused))
+	const uint8_t *indirect;
 
 {{range $i, $b := .Blocks}}
 {{$b.Label}}:
@@ -126,24 +128,23 @@ func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 // blockToC compiles a block to C.
 func blockToC(blk *block) (cBlock, error) {
 	cBlk := cBlock{
-		block:      blk,
-		Statements: make([]string, len(blk.insns)),
+		block: blk,
 	}
 
-	for i, insn := range blk.insns {
+	for _, insn := range blk.insns {
 		stat, err := insnToC(insn, blk)
 		if err != nil {
 			return cBlk, errors.Wrapf(err, "unable to compile %v", insn)
 		}
 
-		cBlk.Statements[i] = stat
+		cBlk.Statements = append(cBlk.Statements, stat...)
 	}
 
 	return cBlk, nil
 }
 
 // insnToC compiles an instruction to a single C line / statement.
-func insnToC(insn instruction, blk *block) (string, error) {
+func insnToC(insn instruction, blk *block) ([]string, error) {
 	switch i := insn.Instruction.(type) {
 
 	case bpf.LoadConstant:
@@ -153,7 +154,7 @@ func insnToC(insn instruction, blk *block) (string, error) {
 	case bpf.LoadAbsolute:
 		return packetLoadToC(i.Size, "data + %d", i.Off)
 	case bpf.LoadIndirect:
-		return packetLoadToC(i.Size, "data + x + %d", i.Off)
+		return packetLoadToC(i.Size, "indirect + %d", i.Off)
 	case bpf.LoadMemShift:
 		return stat("x = 4*(*(data + %d) & 0xf);", i.Off)
 
@@ -162,7 +163,7 @@ func insnToC(insn instruction, blk *block) (string, error) {
 
 	case bpf.LoadExtension:
 		if i.Num != bpf.ExtLen {
-			return "", errors.Errorf("unsupported BPF extension %v", i)
+			return nil, errors.Errorf("unsupported BPF extension %v", i)
 		}
 
 		return stat("a = data_end - data;")
@@ -194,17 +195,26 @@ func insnToC(insn instruction, blk *block) (string, error) {
 	case packetGuardAbsolute:
 		return stat("if (data + %d > data_end) return 0;", i.end)
 	case packetGuardIndirect:
-		return stat("if (data + x + %d > data_end) return 0;", i.end)
+		return []string{
+			// Sign extend RegX to 64bits.
+			fmt.Sprintf("indirect = (uint8_t *) (((int64_t) (int32_t) x) + %d);", i.start),
+			fmt.Sprintf("if ((uint64_t)indirect >= %d) return false;", i.maxStartOffset()),
+			fmt.Sprintf("indirect = data + (uint64_t)indirect;"),
+			// Prevent clang from calculating indirect + delta() directly from the packet start when RegX is constant:
+			// only indirect has the correct bounds check.
+			fmt.Sprintf(`asm volatile("" : : "r" (indirect));`),
+			fmt.Sprintf("if (indirect + %d > data_end) return false;", i.length()),
+		}, nil
 
 	case checkXNotZero:
 		return stat("if (x == 0) return 0;")
 
 	default:
-		return "", errors.Errorf("unsupported instruction %v", insn)
+		return nil, errors.Errorf("unsupported instruction %v", insn)
 	}
 }
 
-func packetLoadToC(size int, offsetFmt string, offsetArgs ...interface{}) (string, error) {
+func packetLoadToC(size int, offsetFmt string, offsetArgs ...interface{}) ([]string, error) {
 	offset := fmt.Sprintf(offsetFmt, offsetArgs...)
 
 	switch size {
@@ -216,10 +226,10 @@ func packetLoadToC(size int, offsetFmt string, offsetArgs ...interface{}) (strin
 		return stat("a = ntohl(*((uint32_t *) (%s)));", offset)
 	}
 
-	return "", errors.Errorf("unsupported load size %d", size)
+	return nil, errors.Errorf("unsupported load size %d", size)
 }
 
-func condToC(skipTrue, skipFalse skip, blk *block, condFmt string, condArgs ...interface{}) (string, error) {
+func condToC(skipTrue, skipFalse skip, blk *block, condFmt string, condArgs ...interface{}) ([]string, error) {
 	cond := fmt.Sprintf(condFmt, condArgs...)
 
 	if skipFalse == 0 {
@@ -229,6 +239,6 @@ func condToC(skipTrue, skipFalse skip, blk *block, condFmt string, condArgs ...i
 	return stat("if (%s) goto %s; else goto %s;", cond, blk.skipToBlock(skipTrue).Label(), blk.skipToBlock(skipFalse).Label())
 }
 
-func stat(format string, a ...interface{}) (string, error) {
-	return fmt.Sprintf(format, a...), nil
+func stat(format string, a ...interface{}) ([]string, error) {
+	return []string{fmt.Sprintf(format, a...)}, nil
 }
