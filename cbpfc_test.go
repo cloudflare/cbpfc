@@ -909,7 +909,7 @@ func TestAbsoluteGuardSize(t *testing.T) {
 	addAbsolutePacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 14}}},
+		[]instruction{{Instruction: packetGuardAbsolute{end: 14}}},
 		insns,
 	), nil)
 }
@@ -928,7 +928,7 @@ func TestNoAbsoluteGuard(t *testing.T) {
 	matchBlock(t, blocks[0], insns, nil)
 }
 
-// Check we use parent guards if they're long / big enough
+// Check we use parent guards if they're big enough
 func TestAbsoluteGuardParentsOK(t *testing.T) {
 	insns := toInstructions([]bpf.Instruction{
 		// block 0
@@ -953,7 +953,7 @@ func TestAbsoluteGuardParentsOK(t *testing.T) {
 	addAbsolutePacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 14}}},
+		[]instruction{{Instruction: packetGuardAbsolute{end: 14}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
@@ -984,7 +984,7 @@ func TestAbsoluteGuardParentNoMatch(t *testing.T) {
 	addAbsolutePacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 16}}},
+		[]instruction{{Instruction: packetGuardAbsolute{end: 16}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
@@ -1019,7 +1019,7 @@ func TestAbsoluteGuardParentDeepNoMatch(t *testing.T) {
 	addAbsolutePacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 18}}},
+		[]instruction{{Instruction: packetGuardAbsolute{end: 18}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
@@ -1049,12 +1049,12 @@ func TestAbsoluteGuardParentMatch(t *testing.T) {
 	addAbsolutePacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 15}}},
+		[]instruction{{Instruction: packetGuardAbsolute{end: 15}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
 	matchBlock(t, blocks[2], join(
-		[]instruction{{Instruction: packetGuardAbsolute{guard: 16}}},
+		[]instruction{{Instruction: packetGuardAbsolute{end: 16}}},
 		insns[4:],
 	), nil)
 }
@@ -1071,7 +1071,7 @@ func TestIndirectGuardSize(t *testing.T) {
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 14}}},
 		insns,
 	), nil)
 }
@@ -1090,7 +1090,7 @@ func TestNoIndirectGuard(t *testing.T) {
 	matchBlock(t, blocks[0], insns, nil)
 }
 
-// Check we add new guards if current is not long / big enough due to RegX clobber
+// Check we add new guards if current is not big enough due to RegX clobber
 func TestIndirectGuardClobber(t *testing.T) {
 	check := func(clobber bpf.Instruction) func(t *testing.T) {
 		return func(t *testing.T) {
@@ -1106,9 +1106,9 @@ func TestIndirectGuardClobber(t *testing.T) {
 			addIndirectPacketGuards(blocks)
 
 			matchBlock(t, blocks[0], join(
-				[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+				[]instruction{{Instruction: packetGuardIndirect{end: 14}}},
 				insns[:2],
-				[]instruction{{Instruction: packetGuardIndirect{guard: 10}}},
+				[]instruction{{Instruction: packetGuardIndirect{end: 10}}},
 				insns[2:],
 			), nil)
 		}
@@ -1141,12 +1141,12 @@ func TestIndirectGuardClobberLast(t *testing.T) {
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 14}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:3], nil)
 	matchBlock(t, blocks[2], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 11}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 11}}},
 		insns[3:],
 	), nil)
 }
@@ -1176,7 +1176,7 @@ func TestIndirectGuardParentsOK(t *testing.T) {
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 14}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
@@ -1207,7 +1207,7 @@ func TestIndirectGuardParentNoMatch(t *testing.T) {
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 16}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 16}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
@@ -1242,7 +1242,7 @@ func TestIndirectGuardParentDeepNoMatch(t *testing.T) {
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 18}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 18}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
@@ -1272,17 +1272,17 @@ func TestIndirectGuardParentMatch(t *testing.T) {
 	addIndirectPacketGuards(blocks)
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 15}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 15}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], insns[2:4], nil)
 	matchBlock(t, blocks[2], join(
-		[]instruction{{Instruction: packetGuardIndirect{guard: 16}}},
+		[]instruction{{Instruction: packetGuardIndirect{end: 16}}},
 		insns[4:],
 	), nil)
 }
 
-// Check we add new guards if one of the parent guards is not long / big enough due to RegX clobber
+// Check we add new guards if one of the parent guards is not big enough due to RegX clobber
 func TestIndirectGuardParentClobber(t *testing.T) {
 	check := func(clobber bpf.Instruction) func(t *testing.T) {
 		return func(t *testing.T) {
@@ -1310,13 +1310,13 @@ func TestIndirectGuardParentClobber(t *testing.T) {
 			addIndirectPacketGuards(blocks)
 
 			matchBlock(t, blocks[0], join(
-				[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+				[]instruction{{Instruction: packetGuardIndirect{end: 14}}},
 				insns[:2],
 			), nil)
 			matchBlock(t, blocks[1], insns[2:5], nil)
 			matchBlock(t, blocks[2], insns[5:6], nil)
 			matchBlock(t, blocks[3], join(
-				[]instruction{{Instruction: packetGuardIndirect{guard: 2}}},
+				[]instruction{{Instruction: packetGuardIndirect{end: 2}}},
 				insns[6:],
 			), nil)
 		}
@@ -1356,12 +1356,12 @@ func TestIndirectGuardExtendClobber(t *testing.T) {
 			addIndirectPacketGuards(blocks)
 
 			matchBlock(t, blocks[0], join(
-				[]instruction{{Instruction: packetGuardIndirect{guard: 14}}},
+				[]instruction{{Instruction: packetGuardIndirect{end: 14}}},
 				insns[:2],
 			), nil)
 			matchBlock(t, blocks[1], insns[2:4], nil)
 			matchBlock(t, blocks[2], join(
-				[]instruction{{Instruction: packetGuardIndirect{guard: 18}}},
+				[]instruction{{Instruction: packetGuardIndirect{end: 18}}},
 				insns[4:6],
 			), nil)
 			matchBlock(t, blocks[3], insns[6:7], nil)

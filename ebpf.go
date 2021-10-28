@@ -278,7 +278,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 	case packetGuardAbsolute:
 		return ebpfInsn(
 			asm.Mov.Reg(opts.regTmp, opts.PacketStart),
-			asm.Add.Imm(opts.regTmp, int32(i.guard)),
+			asm.Add.Imm(opts.regTmp, i.end),
 			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.label(noMatchLabel)),
 		)
 	case packetGuardIndirect:
@@ -288,7 +288,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 			asm.Add.Reg(opts.regIndirect, opts.regX),
 			// different reg (so actual load picks offset), but same verifier context id
 			asm.Mov.Reg(opts.regTmp, opts.regIndirect),
-			asm.Add.Imm(opts.regTmp, int32(i.guard)),
+			asm.Add.Imm(opts.regTmp, i.end),
 			asm.JGT.Reg(opts.regTmp, opts.PacketEnd, opts.label(noMatchLabel)),
 		)
 

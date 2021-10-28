@@ -101,13 +101,48 @@ func (b *block) last() instruction {
 	return b.insns[len(b.insns)-1]
 }
 
-// Greatest known offset into the input packet that is read by the program
-type packetGuard uint32
+// packetGuard is a "fake" cBPF instruction
+// that checks packet bounds before data is read from the packet.
+type packetGuard interface {
+	bpf.Instruction
 
-// packetGuardAbsolute is a "fake" instruction
-// that checks the length of the packet for absolute packet loads
+	// Extend returns a guard that is the union of the current guard and o.
+	extend(o packetGuard) packetGuard
+
+	// Restrict returns a guard that is the intersection of the current guard and o.
+	restrict(o packetGuard) packetGuard
+}
+
+// packetGuardAbsolute checks packet bounds for absolute packet loads (constant offset).
+// We only need to track the last / greatest byte read to ensure it isn't past the packet end.
 type packetGuardAbsolute struct {
-	guard packetGuard
+	// The furthest (exclusive) byte read.
+	end int32
+}
+
+func newPacketGuardAbsolute(off uint32, size int) packetGuardAbsolute {
+	if off > maxPacketOffset {
+		panic("can't create absolute packet guard for offset")
+	}
+
+	// Absolute offsets are limited to maxPacketOffset so this can't overflow.
+	return packetGuardAbsolute{int32(off) + int32(size)}
+}
+
+func (a packetGuardAbsolute) extend(o packetGuard) packetGuard {
+	n := a
+	if b := o.(packetGuardAbsolute); b.end > a.end {
+		n.end = b.end
+	}
+	return n
+}
+
+func (a packetGuardAbsolute) restrict(o packetGuard) packetGuard {
+	n := a
+	if b := o.(packetGuardAbsolute); b.end < a.end {
+		n.end = b.end
+	}
+	return n
 }
 
 // Assemble implements the Instruction Assemble method.
@@ -115,10 +150,30 @@ func (p packetGuardAbsolute) Assemble() (bpf.RawInstruction, error) {
 	return bpf.RawInstruction{}, errors.Errorf("unsupported")
 }
 
-// packetGuardIndirect is a "fake" instruction
-// that checks the length of the packet for indirect packet loads
+// packetGuardIndirect checks packet bounds for indirect packet loads (RegX + constant offset).
 type packetGuardIndirect struct {
-	guard packetGuard
+	// The furthest (exclusive) byte read.
+	end int32
+}
+
+func newPacketGuardIndirect(off uint32, size int) packetGuardIndirect {
+	return packetGuardIndirect{int32(off) + int32(size)}
+}
+
+func (a packetGuardIndirect) extend(o packetGuard) packetGuard {
+	n := a
+	if b := o.(packetGuardIndirect); b.end > a.end {
+		n.end = b.end
+	}
+	return n
+}
+
+func (a packetGuardIndirect) restrict(o packetGuard) packetGuard {
+	n := a
+	if b := o.(packetGuardIndirect); b.end < a.end {
+		n.end = b.end
+	}
+	return n
 }
 
 // Assemble implements the Instruction Assemble method.
@@ -490,18 +545,14 @@ func rewriteLargePacketOffsets(blocks *[]*block) {
 func addAbsolutePacketGuards(blocks []*block) {
 	addPacketGuards(blocks, packetGuardOpts{
 		requiredGuard: func(insns []instruction) requiredGuard {
-			var biggestGuard packetGuard
+			var biggestGuard packetGuard = packetGuardAbsolute{}
 
 			for _, insn := range insns {
 				switch i := insn.Instruction.(type) {
 				case bpf.LoadAbsolute:
-					if a := packetGuard(i.Off + uint32(i.Size)); a > biggestGuard {
-						biggestGuard = a
-					}
+					biggestGuard = biggestGuard.extend(newPacketGuardAbsolute(i.Off, i.Size))
 				case bpf.LoadMemShift:
-					if a := packetGuard(i.Off + 1); a > biggestGuard {
-						biggestGuard = a
-					}
+					biggestGuard = biggestGuard.extend(newPacketGuardAbsolute(i.Off, 1))
 				}
 			}
 
@@ -512,8 +563,8 @@ func addAbsolutePacketGuards(blocks []*block) {
 			}
 		},
 
-		createInsn: func(guard packetGuard) bpf.Instruction {
-			return packetGuardAbsolute{guard: guard}
+		zeroGuard: func() packetGuard {
+			return packetGuardAbsolute{}
 		},
 	})
 }
@@ -524,7 +575,7 @@ func addIndirectPacketGuards(blocks []*block) {
 		requiredGuard: func(insns []instruction) requiredGuard {
 			var (
 				insnCount    int
-				biggestGuard packetGuard
+				biggestGuard packetGuard = packetGuardIndirect{}
 			)
 
 			for _, insn := range insns {
@@ -532,9 +583,7 @@ func addIndirectPacketGuards(blocks []*block) {
 
 				switch i := insn.Instruction.(type) {
 				case bpf.LoadIndirect:
-					if a := packetGuard(i.Off + uint32(i.Size)); a > biggestGuard {
-						biggestGuard = a
-					}
+					biggestGuard = biggestGuard.extend(newPacketGuardIndirect(i.Off, i.Size))
 				}
 
 				// Check if we clobbered x - this invalidates the guard
@@ -552,8 +601,8 @@ func addIndirectPacketGuards(blocks []*block) {
 			}
 		},
 
-		createInsn: func(guard packetGuard) bpf.Instruction {
-			return packetGuardIndirect{guard: guard}
+		zeroGuard: func() packetGuard {
+			return packetGuardIndirect{}
 		},
 	})
 }
@@ -562,8 +611,8 @@ type packetGuardOpts struct {
 	// requiredGuard returns the packetGuard needed by insns, and what insns it is valid for.
 	requiredGuard func(insns []instruction) requiredGuard
 
-	// createInsn creates an instruction that checks the packet length against the guard
-	createInsn func(guard packetGuard) bpf.Instruction
+	// zeroGuard returns an empty guard of the right type.
+	zeroGuard func() packetGuard
 }
 
 type requiredGuard struct {
@@ -590,7 +639,7 @@ func addPacketGuards(blocks []*block, opts packetGuardOpts) {
 	guards := make(map[*block][]packetGuard)
 
 	for _, block := range blocks {
-		blockGuard := addBlockGuards(block, leastGuard(guards[block]), opts)
+		blockGuard := addBlockGuards(block, leastGuard(opts.zeroGuard(), guards[block]), opts)
 
 		for _, target := range block.jumps {
 			guards[target] = append(guards[target], blockGuard)
@@ -606,9 +655,10 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 	for len(insns) != 0 {
 		required := opts.requiredGuard(insns)
 
-		// Need a bigger guard for these insns
-		if required.guard != 0 && required.guard > currentGuard {
-			currentGuard = required.guard
+		// Need a bigger guard for these insns. Don't use the bigger guard on it's own,
+		// extend the current one so we keep as much information as we have.
+		if newGuard := currentGuard.extend(required.guard); newGuard != currentGuard {
+			currentGuard = newGuard
 
 			// Last guard we need for this block -> what our children / target blocks will start with
 			if required.alwaysValid {
@@ -616,12 +666,10 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 				// without changing the return value of the program:
 				//   - packets smaller than the guaranteed guard cannot match anyways, we can safely reject them earlier
 				//   - packets bigger than the guaranteed guard won't be affected by it
-				if guaranteed := guaranteedGuard(block.jumps, opts); guaranteed > required.guard {
-					currentGuard = guaranteed
-				}
+				currentGuard = currentGuard.extend(guaranteedGuard(block.jumps, opts))
 			}
 
-			block.insns = append(block.insns, instruction{Instruction: opts.createInsn(currentGuard)})
+			block.insns = append(block.insns, instruction{Instruction: currentGuard})
 		}
 
 		// Guard covers remainder of block, and is still valid at the end.
@@ -631,7 +679,7 @@ func addBlockGuards(block *block, currentGuard packetGuard, opts packetGuardOpts
 		}
 
 		// Guard isn't valid anymore.
-		currentGuard = 0
+		currentGuard = opts.zeroGuard()
 		block.insns = append(block.insns, insns[:required.validForInsns]...)
 		insns = insns[required.validForInsns:]
 	}
@@ -682,26 +730,25 @@ func guaranteedGuardCached(targets map[pos]*block, opts packetGuardOpts, cache m
 			continue
 		}
 
-		guard := required.guard
-		if guaranteed := guaranteedGuardCached(target.jumps, opts, cache); guaranteed > required.guard {
-			guard = guaranteed
-		}
+		guard := required.guard.extend(guaranteedGuardCached(target.jumps, opts, cache))
 
 		cache[target] = guard
 		targetGuards = append(targetGuards, guard)
 	}
 
-	return leastGuard(targetGuards)
+	return leastGuard(opts.zeroGuard(), targetGuards)
 }
 
 // leastGuard returns the smallest guard from guards.
-// 0 if there are no guards.
-func leastGuard(guards []packetGuard) packetGuard {
-	var least packetGuard
+// zero if there are no guards.
+func leastGuard(zero packetGuard, guards []packetGuard) packetGuard {
+	least := zero
 
 	for i, guard := range guards {
-		if i == 0 || guard < least {
+		if i == 0 {
 			least = guard
+		} else {
+			least = least.restrict(guard)
 		}
 	}
 
