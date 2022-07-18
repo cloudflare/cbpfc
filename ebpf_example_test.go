@@ -58,10 +58,10 @@ func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
 	prog = append(prog, ebpfFilter...)
 
 	prog = append(prog,
-		asm.Mov.Imm(asm.R0, 2).Sym("result"), // XDP_PASS
+		asm.Mov.Imm(asm.R0, 2).WithSymbol("result"), // XDP_PASS
 		asm.JEq.Imm(asm.R4, 0, "return"),
 		asm.Mov.Imm(asm.R0, 1), // XDP_DROP
-		asm.Return().Sym("return"),
+		asm.Return().WithSymbol("return"),
 	)
 
 	return prog, nil
