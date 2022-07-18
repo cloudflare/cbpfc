@@ -142,7 +142,7 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) (asm.Instructions, error) {
 
 			// First insn of the block, add symbol so it can be referenced in jumps
 			if i == 0 {
-				eInsn[0].Symbol = eOpts.label(block.Label())
+				eInsn[0] = eInsn[0].WithSymbol(eOpts.label(block.Label()))
 			}
 
 			eInsns = append(eInsns, eInsn...)
@@ -152,7 +152,7 @@ func ToEBPF(filter []bpf.Instruction, opts EBPFOpts) (asm.Instructions, error) {
 	// kernel verifier does not like dead code - only include no match block if we used it
 	if _, ok := eInsns.ReferenceOffsets()[eOpts.label(noMatchLabel)]; ok {
 		eInsns = append(eInsns,
-			asm.Mov.Imm(eOpts.Result, 0).Sym(eOpts.label(noMatchLabel)),
+			asm.Mov.Imm(eOpts.Result, 0).WithSymbol(eOpts.label(noMatchLabel)),
 			asm.Ja.Label(opts.ResultLabel),
 		)
 	}
