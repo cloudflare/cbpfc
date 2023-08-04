@@ -75,7 +75,7 @@ func ExampleToC() {
 		bpf.RetConstant{Val: 1},
 	}
 
-	elf, err := buildC(filter, "example")
+	elf, err := buildC(filter, "example", COpts{FunctionName: "example_filter"})
 	if err != nil {
 		panic(err)
 	}
@@ -89,13 +89,9 @@ func ExampleToC() {
 // and compiles the resulting C program to eBPF / XDP using clang.
 // The XDP program XDP_DROP's incoming packets that match the filter.
 // Returns the compiled ELF
-func buildC(filter []bpf.Instruction, programName string) ([]byte, error) {
-	filterName := programName + "_filter"
-
+func buildC(filter []bpf.Instruction, programName string, opts COpts) ([]byte, error) {
 	// convert filter to C
-	ebpfFilter, err := ToC(filter, COpts{
-		FunctionName: filterName,
-	})
+	ebpfFilter, err := ToC(filter, opts)
 	if err != nil {
 		return nil, errors.Wrap(err, "converting filter to C")
 	}
@@ -104,7 +100,7 @@ func buildC(filter []bpf.Instruction, programName string) ([]byte, error) {
 	c := bytes.Buffer{}
 	err = testTemplate.Execute(&c, testTemplateOpts{
 		Filter:      ebpfFilter,
-		FilterName:  filterName,
+		FilterName:  opts.FunctionName,
 		ProgramName: programName,
 	})
 	if err != nil {

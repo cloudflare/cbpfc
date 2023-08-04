@@ -30,11 +30,32 @@ func TestFunctionName(t *testing.T) {
 	checkName(t, "a2", true)
 }
 
+func TestNoInline(t *testing.T) {
+	elf, err := buildC([]bpf.Instruction{
+		bpf.RetConstant{Val: 1},
+	}, entryPoint, COpts{
+		FunctionName: "filter",
+		NoInline:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(elf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res := testProg(t, spec.Programs[entryPoint], []byte{1}); res != match {
+		t.Fatalf("expected match, got %v", res)
+	}
+}
+
 const entryPoint = "xdp_filter"
 
 // cBackend compiles classic BPF to C, which is compiled with clang
 func cBackend(tb testing.TB, insns []bpf.Instruction, in []byte) result {
-	elf, err := buildC(insns, entryPoint)
+	elf, err := buildC(insns, entryPoint, COpts{FunctionName: "filter"})
 	if err != nil {
 		tb.Fatal(err)
 	}
