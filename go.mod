@@ -7,4 +7,4 @@ require (
 	golang.org/x/sys v0.0.0-20210921065528-437939a70204
 )
 
-go 1.16
+go 1.19
