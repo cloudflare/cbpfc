@@ -82,7 +82,7 @@ type COpts struct {
 
 // ToC compiles a cBPF filter to a C function with a signature of:
 //
-//     uint32_t opts.FunctionName(const uint8_t *const data, const uint8_t *const data_end)
+//	uint32_t opts.FunctionName(const uint8_t *const data, const uint8_t *const data_end)
 //
 // The function returns the filter's return value:
 // 0 if the packet does not match the cBPF filter,
