@@ -38,10 +38,10 @@ var condToInverse = map[bpf.JumpTest]bpf.JumpTest{
 }
 
 // pos stores the absolute position of a cBPF instruction
-type pos uint
+type pos uint32
 
 // skips store cBPF jumps, which are relative
-type skip uint
+type skip uint32
 
 // instruction wraps a bpf instruction with it's
 // original position
