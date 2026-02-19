@@ -1,5 +1,5 @@
 # Anytime we push to any branch
-on: push
+on: [push, pull_request]
 
 jobs:
   test:
