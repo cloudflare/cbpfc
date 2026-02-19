@@ -46,7 +46,8 @@ func TestNoInline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if res := testProg(t, spec.Programs[entryPoint], []byte{1}); res != match {
+	in := make([]byte, 14)
+	if res := testProg(t, spec.Programs[entryPoint], in); res != match {
 		t.Fatalf("expected match, got %v", res)
 	}
 }
