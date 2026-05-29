@@ -2,6 +2,7 @@ package cbpfc
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/cilium/ebpf"
@@ -28,6 +29,22 @@ func TestFunctionName(t *testing.T) {
 	checkName(t, "0foo\nfoo", false)
 	checkName(t, "foo_bar2", true)
 	checkName(t, "a2", true)
+}
+
+func TestToCNoInline(t *testing.T) {
+	elf, err := ToC([]bpf.Instruction{
+		bpf.RetConstant{Val: 1},
+	}, COpts{
+		FunctionName: "filter",
+		NoInline:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(elf, "__always_inline__") {
+		t.Fatal("generated C source should not contain __always_inline__ when NoInline is true")
+	}
 }
 
 func TestNoInline(t *testing.T) {
