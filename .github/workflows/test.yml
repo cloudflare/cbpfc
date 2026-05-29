@@ -1,0 +1,42 @@
+# Anytime we push to any branch
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test clang-${{ matrix.clang }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      matrix:
+        clang: ["11", "14", "20"]
+
+    steps:
+    - name: Set up Go 1.x
+      uses: actions/setup-go@v2
+      with:
+        go-version: ^1.24
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Add apt.llvm.org repo
+      # clang-11 is in the upstream jammy repo, but not apt.llvm.org.
+      if: matrix.clang != 11
+      run: |
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key 2>/dev/null | sudo apt-key add -
+        echo 'deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${{ matrix.clang }} main' | sudo tee /etc/apt/sources.list.d/clang.list
+        # Only update the llvm repo, this is a lot faster.
+        sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/clang.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+
+    - name: Install clang
+      run: sudo apt-get install -y clang-${{ matrix.clang }}
+
+    - name: Check lint
+      # gofmt doesn't report any changes
+      run: test -z $(gofmt -l ./ | tee /dev/stderr)
+
+    - name: Run tests
+      env:
+        CLANG: clang-${{ matrix.clang }}
+      # tests need to run as root to load XDP programs
+      run: sudo -E env "PATH=$PATH" go test ./...
