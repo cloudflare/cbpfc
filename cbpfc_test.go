@@ -1423,6 +1423,53 @@ func join(insns ...[]instruction) []instruction {
 	return res
 }
 
+// maxStartOffsetWithBase reserves the base offset of PacketStart from the
+// packet-offset budget, and fails closed when no room remains.
+func TestMaxStartOffsetWithBase(t *testing.T) {
+	// guard [8:14], length 6.
+	guard := packetGuardIndirect{start: 8, end: 14}
+	base := guard.maxStartOffset()
+	if base <= 0 {
+		t.Fatalf("expected positive maxStartOffset, got %d", base)
+	}
+
+	tests := []struct {
+		name       string
+		baseOffset int32
+		want       int32
+	}{
+		{"zero offset matches maxStartOffset", 0, base},
+		{"offset reserves budget", 18, base - 18},
+		{"offset just within budget", base - 1, 1},
+		{"offset consumes whole budget fails closed", base, 0},
+		{"offset beyond budget fails closed", base + 100, 0},
+		{"negative offset fails closed", -1, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := guard.maxStartOffsetWithBase(tc.baseOffset); got != tc.want {
+				t.Fatalf("maxStartOffsetWithBase(%d) = %d, want %d", tc.baseOffset, got, tc.want)
+			}
+		})
+	}
+}
+
+// A guard whose length already exceeds maxPacketOffset fails closed regardless
+// of the base offset (maxStartOffset returns the 0 sentinel).
+func TestMaxStartOffsetWithBaseOversizedGuard(t *testing.T) {
+	guard := packetGuardIndirect{start: 0, end: maxPacketOffset + 10}
+	if got := guard.maxStartOffset(); got != 0 {
+		t.Fatalf("expected oversized guard maxStartOffset to be 0, got %d", got)
+	}
+	if got := guard.maxStartOffsetWithBase(0); got != 0 {
+		t.Fatalf("expected fail-closed for oversized guard, got %d", got)
+	}
+	if got := guard.maxStartOffsetWithBase(18); got != 0 {
+		t.Fatalf("expected fail-closed for oversized guard with base, got %d", got)
+	}
+}
+
 // matchBlock checks a block has the given instructions and jumps
 func matchBlock(t *testing.T, b *block, expected []instruction, jumps map[pos]*block) {
 	t.Helper()

@@ -58,6 +58,19 @@ type EBPFOpts struct {
 
 	// LabelPrefix is the prefix to prepend to labels used internally.
 	LabelPrefix string
+
+	// PacketStartOffset is the fixed offset (in bytes) of PacketStart within the
+	// packet, when this is known at compile time. It defaults to 0 (PacketStart
+	// points at the very start of the packet).
+	//
+	// The eBPF verifier refuses to grant a range to a packet pointer whenever
+	// off + umax_value > MAX_PACKET_OFF (0xFFFF). When PacketStart already carries
+	// a non-zero fixed offset (e.g. it points at the L3 header rather than the
+	// start of the frame), an indirect load with a data-dependent index can push
+	// off + umax_value past that limit, and the program fails to verify even
+	// though it is safe. Setting PacketStartOffset reserves that many bytes of the
+	// packet-offset budget in the indirect load guards so verification succeeds.
+	PacketStartOffset int
 }
 
 // ebpfOpts is the internal version of EBPFOpts
@@ -288,9 +301,10 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 			asm.LSh.Imm(opts.regIndirect, 32),
 			asm.ArSh.Imm(opts.regIndirect, 32),
 
-			// Check maxStartOffset()
+			// Check maxStartOffset(), reserving PacketStartOffset bytes of the
+			// packet-offset budget for PacketStart's own fixed offset.
 			asm.Add.Imm(opts.regIndirect, i.start),
-			asm.JGE.Imm(opts.regIndirect, i.maxStartOffset(), opts.label(noMatchLabel)),
+			asm.JGE.Imm(opts.regIndirect, i.maxStartOffsetWithBase(int32(opts.PacketStartOffset)), opts.label(noMatchLabel)),
 
 			// packet_start + signed x + start
 			// This will have a smin_value >= 0

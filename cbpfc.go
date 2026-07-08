@@ -258,6 +258,41 @@ func (p packetGuardIndirect) maxStartOffset() int32 {
 	return int32(maxPacketOffset) - int32(length) + 1
 }
 
+// maxStartOffsetWithBase is like maxStartOffset but reserves baseOffset bytes of
+// the packet-offset budget for a non-zero fixed offset of PacketStart (e.g. an
+// L3 offset).
+//
+// The eBPF verifier refuses to compute a range for a packet pointer when
+// off + umax_value > maxPacketOffset. When PacketStart already carries a fixed
+// offset (baseOffset), the variable part (int32(RegX) + p.start) must be bounded
+// so that baseOffset + (int32(RegX) + p.start) + p.length() <= maxPacketOffset.
+//
+// Returns 0 (check always false, i.e. noMatch) when there is no room left once
+// baseOffset is accounted for, so we fail closed rather than emit an unbounded
+// (and unverifiable) load. A negative baseOffset is invalid (PacketStart cannot
+// sit before the start of the packet) and also fails closed, so we never grant
+// extra budget from bogus input.
+func (p packetGuardIndirect) maxStartOffsetWithBase(baseOffset int32) int32 {
+	// A negative base offset would widen the budget rather than shrink it: reject
+	// it and fail closed.
+	if baseOffset < 0 {
+		return 0
+	}
+
+	max := p.maxStartOffset()
+	// maxStartOffset already hit the fail-closed sentinel: keep failing.
+	if max == 0 {
+		return 0
+	}
+
+	max -= baseOffset
+	if max <= 0 {
+		return 0
+	}
+
+	return max
+}
+
 // packet_start + (int32(x) + p.start) + p.length() must be <= packet_end.
 // This lets us reuse the (int32(x) + p.start) from the maxStartOffset() check, to keep the bounds info.
 func (p packetGuardIndirect) length() int32 {
