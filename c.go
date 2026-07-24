@@ -86,6 +86,9 @@ type COpts struct {
 	// a BPF to BPF call.
 	// Requires at least kernel 5.10 (for x86, later for other architectures) if used with tail-calls.
 	NoInline bool
+
+	// PacketStartMaxOffset is the maximum offset the packet start / data is at, in bytes.
+	PacketStartMaxOffset uint16
 }
 
 // ToC compiles a cBPF filter to a C function with a signature of:
@@ -113,7 +116,7 @@ func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 
 	// Compile blocks to C
 	for i, block := range blocks {
-		fun.Blocks[i], err = blockToC(block)
+		fun.Blocks[i], err = blockToC(block, opts)
 		if err != nil {
 			return "", err
 		}
@@ -135,13 +138,13 @@ func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 }
 
 // blockToC compiles a block to C.
-func blockToC(blk *block) (cBlock, error) {
+func blockToC(blk *block, opts COpts) (cBlock, error) {
 	cBlk := cBlock{
 		block: blk,
 	}
 
 	for _, insn := range blk.insns {
-		stat, err := insnToC(insn, blk)
+		stat, err := insnToC(insn, blk, opts)
 		if err != nil {
 			return cBlk, errors.Wrapf(err, "unable to compile %v", insn)
 		}
@@ -153,7 +156,7 @@ func blockToC(blk *block) (cBlock, error) {
 }
 
 // insnToC compiles an instruction to a single C line / statement.
-func insnToC(insn instruction, blk *block) ([]string, error) {
+func insnToC(insn instruction, blk *block, opts COpts) ([]string, error) {
 	switch i := insn.Instruction.(type) {
 
 	case bpf.LoadConstant:
@@ -207,7 +210,7 @@ func insnToC(insn instruction, blk *block) ([]string, error) {
 		return []string{
 			// Sign extend RegX to 64bits.
 			fmt.Sprintf("indirect = (uint8_t *) (((int64_t) (int32_t) x) + %d);", i.start),
-			fmt.Sprintf("if ((uint64_t)indirect >= %d) return false;", i.maxStartOffset()),
+			fmt.Sprintf("if ((uint64_t)indirect >= %d) return false;", i.maxStartOffset(opts.PacketStartMaxOffset)),
 			fmt.Sprintf("indirect = data + (uint64_t)indirect;"),
 			// Prevent clang from calculating indirect + delta() directly from the packet start when RegX is constant:
 			// only indirect has the correct bounds check.

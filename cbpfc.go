@@ -11,6 +11,9 @@
 //   - Division by zero is guarded by runtime checks
 //
 // The generated C / eBPF is intended to be embedded into a larger C / eBPF program.
+//
+// Footguns / limitations:
+//   - If
 package cbpfc
 
 import (
@@ -242,20 +245,20 @@ func (a packetGuardIndirect) restrict(o packetGuard) packetGuard {
 	return n
 }
 
-// int32(RegX) + p.start must be < to maxStartOffset().
+// int32(RegX) + p.start must be < to maxStartOffset(packetStartMaxOffset).
 // This checks that it is positive, and int32(RegX) + p.end doesn't exceed maxPacketOffset.
 // Returns 0 (check will always be false) if there is no way for the start and end of the guard to be < maxPacketOffset.
-func (p packetGuardIndirect) maxStartOffset() int32 {
-	length := p.end - int64(p.start)
-	// If length exceeds maxPacketOffset, there's no way for RegX + start >= 0 and RegX + end < maxPacketOffset.
+func (p packetGuardIndirect) maxStartOffset(packetStartMaxOffset uint16) int32 {
+	m := maxPacketOffset - int64(packetStartMaxOffset) - (p.end - int64(p.start))
+	// If m is negative, (packetStartMaxOffset + length) exceeds maxPacketOffset, there's no way for RegX + start >= 0 and RegX + end < maxPacketOffset.
 	// Return 0 so the check fails, and we return noMatch.
-	if length > maxPacketOffset {
+	if m < 0 {
 		return 0
 	}
 
 	// +1 as it needs to be strictly less than.
 	// This lets us return 0 above to get noMatch.
-	return int32(maxPacketOffset) - int32(length) + 1
+	return int32(m) + 1
 }
 
 // packet_start + (int32(x) + p.start) + p.length() must be <= packet_end.

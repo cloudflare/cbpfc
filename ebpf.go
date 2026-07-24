@@ -36,8 +36,12 @@ var sizeToEBPF = map[int]asm.Size{
 // EBPFOpts control how a cBPF filter is converted to eBPF
 type EBPFOpts struct {
 	// PacketStart is a register holding a pointer to the start of the packet.
+	// If this pointer is offset from the original BPF context pointer,
+	// the maximum value of this offset must be set as PacketStartMaxOffset.
 	// Not modified.
 	PacketStart asm.Register
+	// PacketStartMaxOffset is the maximum offset PacketStart is at, in bytes.
+	PacketStartMaxOffset uint16
 	// PacketEnd is a register holding a pointer to the end of the packet.
 	// Not modified.
 	PacketEnd asm.Register
@@ -290,7 +294,7 @@ func insnToEBPF(insn instruction, blk *block, opts ebpfOpts) (asm.Instructions, 
 
 			// Check maxStartOffset()
 			asm.Add.Imm(opts.regIndirect, i.start),
-			asm.JGE.Imm(opts.regIndirect, i.maxStartOffset(), opts.label(noMatchLabel)),
+			asm.JGE.Imm(opts.regIndirect, i.maxStartOffset(opts.PacketStartMaxOffset), opts.label(noMatchLabel)),
 
 			// packet_start + signed x + start
 			// This will have a smin_value >= 0
