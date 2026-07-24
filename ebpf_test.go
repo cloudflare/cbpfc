@@ -8,8 +8,8 @@ import (
 )
 
 // ebpfBacked is backend that compiles classic BPF to eBPF
-func ebpfBackend(tb testing.TB, insns []bpf.Instruction, in []byte) result {
-	prog, err := buildEBPF(insns)
+func ebpfBackend(tb testing.TB, insns []bpf.Instruction, in []byte, opts backendOpts) result {
+	prog, err := buildEBPF(insns, opts.offset)
 	if err != nil {
 		tb.Fatal(err)
 	}

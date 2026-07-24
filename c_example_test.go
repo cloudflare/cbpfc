@@ -48,7 +48,7 @@ __section("xdp") int {{.ProgramName}}(struct xdp_md *ctx) {
 	uint8_t *data = (uint8_t *)(long)ctx->data;
 	uint8_t const *data_end = (uint8_t *)(long)ctx->data_end;
 
-	if ({{.FilterName}}(data, data_end)) {
+	if ({{.FilterName}}(data + {{.Offset}}, data_end)) {
 		return XDP_DROP;
 	}
 
@@ -65,6 +65,10 @@ type testTemplateOpts struct {
 
 	// Name of the eBPF program
 	ProgramName string
+
+	// Offset the packet start is advanced by before the filter is called.
+	// Must match the COpts.PacketStartMaxOffset the filter was compiled with.
+	Offset uint16
 }
 
 // ExampleToC demonstrates how to use ToC() to embed a cBPF filter
@@ -102,6 +106,7 @@ func buildC(filter []bpf.Instruction, programName string, opts COpts) ([]byte, e
 		Filter:      ebpfFilter,
 		FilterName:  opts.FunctionName,
 		ProgramName: programName,
+		Offset:      opts.PacketStartMaxOffset,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "executing template with C filter")

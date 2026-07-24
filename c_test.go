@@ -72,8 +72,8 @@ func TestNoInline(t *testing.T) {
 const entryPoint = "xdp_filter"
 
 // cBackend compiles classic BPF to C, which is compiled with clang
-func cBackend(tb testing.TB, insns []bpf.Instruction, in []byte) result {
-	elf, err := buildC(insns, entryPoint, COpts{FunctionName: "filter"})
+func cBackend(tb testing.TB, insns []bpf.Instruction, in []byte, opts backendOpts) result {
+	elf, err := buildC(insns, entryPoint, COpts{FunctionName: "filter", PacketStartMaxOffset: opts.offset})
 	if err != nil {
 		tb.Fatal(err)
 	}

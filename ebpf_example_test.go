@@ -14,7 +14,7 @@ func ExampleToEBPF() {
 		bpf.RetConstant{Val: 1},
 	}
 
-	prog, err := buildEBPF(filter)
+	prog, err := buildEBPF(filter, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -27,11 +27,12 @@ func ExampleToEBPF() {
 // buildEBPF compiles a cBPF filter to eBPF, and embeds it an eBPF program.
 // The XDP program XDP_DROP's incoming packets that match the filter.
 // Returns the eBPF program instructions
-func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
+func buildEBPF(filter []bpf.Instruction, offset uint16) (asm.Instructions, error) {
 	ebpfFilter, err := ToEBPF(filter, EBPFOpts{
 		// Pass packet start and end pointers in these registers
-		PacketStart: asm.R2,
-		PacketEnd:   asm.R3,
+		PacketStart:          asm.R2,
+		PacketStartMaxOffset: offset,
+		PacketEnd:            asm.R3,
 		// Result of filter
 		Result:      asm.R4,
 		ResultLabel: "result",
@@ -48,6 +49,8 @@ func buildEBPF(filter []bpf.Instruction) (asm.Instructions, error) {
 
 		// Packet start
 		asm.LoadMem(asm.R2, asm.R1, 0, asm.Word),
+		// Fixed offset
+		asm.Add.Imm(asm.R2, int32(offset)),
 
 		// Packet end
 		asm.LoadMem(asm.R3, asm.R1, 4, asm.Word),
