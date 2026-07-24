@@ -159,6 +159,45 @@ func TestLoadAbsoluteBigOffset(t *testing.T) {
 	checkBackends(t, filter(bpf.LoadMemShift{Off: maxPacketOffset}), nil, noMatch)
 }
 
+// Absolute load with an offset packet pointer.
+func TestLoadAbsolutePacketStartMaxOffset(t *testing.T) {
+	t.Parallel()
+
+	// XDP limits packets to one page, so there's no way to feed a packet big enough to test the offsets
+	// we want through BPF_PROG_TEST_RUN.
+	// All we can check is that the verifier accepts the program and it doesn't match.
+	filter := func(load bpf.Instruction) []bpf.Instruction {
+		return []bpf.Instruction{
+			load,
+			// Make sure we return a different value if the load succeeds.
+			bpf.ALUOpConstant{Op: bpf.ALUOpAdd, Val: 2},
+			bpf.RetA{},
+		}
+	}
+
+	for _, offset := range []uint16{0, 1, 14, 18, 64} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			t.Parallel()
+
+			opts := backendOpts{offset: offset}
+
+			// Smallest out of bounds offset once the packet start offset is accounted for,
+			// mirroring maxPacketOffset in TestLoadAbsoluteBigOffset.
+			maxOffset := uint32(maxPacketOffset - offset)
+
+			checkBackends(t, filter(bpf.LoadAbsolute{Off: maxOffset - 1, Size: 1}), nil, noMatch, opts)
+			checkBackends(t, filter(bpf.LoadAbsolute{Off: maxOffset, Size: 1}), nil, noMatch, opts)
+			checkBackends(t, filter(bpf.LoadAbsolute{Off: maxOffset - 2, Size: 2}), nil, noMatch, opts)
+			checkBackends(t, filter(bpf.LoadAbsolute{Off: maxOffset - 1, Size: 2}), nil, noMatch, opts)
+			checkBackends(t, filter(bpf.LoadAbsolute{Off: maxOffset - 4, Size: 4}), nil, noMatch, opts)
+			checkBackends(t, filter(bpf.LoadAbsolute{Off: maxOffset - 3, Size: 4}), nil, noMatch, opts)
+
+			checkBackends(t, filter(bpf.LoadMemShift{Off: maxOffset - 1}), nil, noMatch, opts)
+			checkBackends(t, filter(bpf.LoadMemShift{Off: maxOffset}), nil, noMatch, opts)
+		})
+	}
+}
+
 func TestLoadIndirect(t *testing.T) {
 	t.Parallel()
 
@@ -306,6 +345,40 @@ func TestLoadIndirectGuardOverflow(t *testing.T) {
 		bpf.TXA{},
 		bpf.RetA{},
 	}, nil, noMatch)
+}
+
+// Indirect load with an offset packet pointer.
+func TestLoadIndirectPacketStartMaxOffset(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		// Variable RegX
+		bpf.LoadAbsolute{Off: 0, Size: 4},
+		bpf.TAX{},
+		bpf.LoadIndirect{Off: 4, Size: 4},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0xDEADBEEF, SkipTrue: 1},
+		bpf.RetConstant{Val: 0},
+		bpf.RetConstant{Val: 1},
+	}
+
+	// RegX is the first 4 bytes after offset.
+	packet := func(offset uint16, val []byte) []byte {
+		in := append(make([]byte, offset), 0, 0, 0, 3, 0, 0, 0)
+		return append(in, val...)
+	}
+
+	for _, offset := range []uint16{0, 1, 14, 18, 64} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			t.Parallel()
+
+			checkBackends(t, filter, packet(offset, []byte{0xDE, 0xAD, 0xBE, 0xEF}), match, backendOpts{
+				offset: offset,
+			})
+			checkBackends(t, filter, packet(offset, []byte{0xDE, 0xAD, 0xBE, 0xEE}), noMatch, backendOpts{
+				offset: offset,
+			})
+		})
+	}
 }
 
 // The 0 scratch slot is usable.
@@ -805,11 +878,16 @@ func (r result) String() string {
 }
 
 // True IFF packet matches filter
-type backend func(testing.TB, []bpf.Instruction, []byte) result
+type backend func(testing.TB, []bpf.Instruction, []byte, backendOpts) result
+
+type backendOpts struct {
+	// Fixed offset into the packet to use.
+	offset uint16
+}
 
 // checkBackends checks if all the backends match the packet as expected.
 // Input packet is 0 padded to min ethernet length.
-func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected result) {
+func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected result, opts ...backendOpts) {
 	t.Helper()
 
 	if len(in) < 14 {
@@ -818,9 +896,18 @@ func checkBackends(t *testing.T, filter []bpf.Instruction, in []byte, expected r
 		in = t
 	}
 
+	var options backendOpts
+	switch len(opts) {
+	case 0:
+	case 1:
+		options = opts[0]
+	default:
+		t.Fatal("multiple backendOpts provided")
+	}
+
 	check := func(b backend) func(*testing.T) {
 		return func(t *testing.T) {
-			if got := b(t, filter, in); got != expected {
+			if got := b(t, filter, in, options); got != expected {
 				t.Fatalf("Got %q, expected %q", got, expected)
 			}
 		}

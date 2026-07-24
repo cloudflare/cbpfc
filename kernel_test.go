@@ -12,7 +12,13 @@ import (
 )
 
 // kernelBackend is a backend that runs cBPF in the kernel
-func kernelBackend(tb testing.TB, insns []bpf.Instruction, in []byte) result {
+func kernelBackend(tb testing.TB, insns []bpf.Instruction, in []byte, opts backendOpts) result {
+	// There's no easy way to support fixed offsets, we'd have to rewrite all the LoadAbsolute and LoadIndirect
+	// instructions.
+	if opts.offset != 0 {
+		tb.Skip()
+	}
+
 	filter, err := bpf.Assemble(insns)
 	if err != nil {
 		tb.Fatal(err)

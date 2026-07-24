@@ -23,7 +23,7 @@ func requireError(tb testing.TB, err error, contains string) {
 
 // Make sure we bail out with 0 instructions
 func TestZero(t *testing.T) {
-	_, err := compile([]bpf.Instruction{})
+	_, err := compile([]bpf.Instruction{}, compileOpts{})
 
 	requireError(t, err, "can't compile 0 instructions")
 }
@@ -31,7 +31,7 @@ func TestZero(t *testing.T) {
 func TestRaw(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.RawInstruction{},
-	})
+	}, compileOpts{})
 
 	requireError(t, err, "unsupported instruction 0:")
 }
@@ -47,7 +47,7 @@ func TestLoadAbsoluteNegativeOffset(t *testing.T) {
 		_, err := compile([]bpf.Instruction{
 			insn,
 			bpf.RetA{},
-		})
+		}, compileOpts{})
 
 		requireError(t, err, "negative offset -1")
 	}
@@ -61,7 +61,7 @@ func TestExtension(t *testing.T) {
 		_, err := compile([]bpf.Instruction{
 			bpf.LoadExtension{Num: ext},
 			bpf.RetA{},
-		})
+		}, compileOpts{})
 
 		switch ext {
 		case bpf.ExtLen:
@@ -79,7 +79,7 @@ func TestJumpOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegX, Val: 0},
 		bpf.Jump{Skip: 0},
-	})
+	}, compileOpts{})
 
 	requireError(t, err, "instruction 1: ja 0 flows past last instruction")
 }
@@ -88,7 +88,7 @@ func TestJumpIfOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 2, SkipTrue: 0, SkipFalse: 1},
-	})
+	}, compileOpts{})
 
 	requireError(t, err, "instruction 1: jneq #2,1 flows past last instruction")
 }
@@ -98,7 +98,7 @@ func TestJumpIfXOut(t *testing.T) {
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
 		bpf.LoadConstant{Dst: bpf.RegX, Val: 3},
 		bpf.JumpIfX{Cond: bpf.JumpEqual, SkipTrue: 1, SkipFalse: 0},
-	})
+	}, compileOpts{})
 
 	requireError(t, err, "instruction 2: jeq x,1 flows past last instruction")
 }
@@ -107,7 +107,7 @@ func TestJumpIfXOut(t *testing.T) {
 func TestFallthroughOut(t *testing.T) {
 	_, err := compile([]bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: 0},
-	})
+	}, compileOpts{})
 
 	requireError(t, err, "instruction 0: ld #0 flows past last instruction")
 }
@@ -808,7 +808,7 @@ func TestDivisionByZeroParentsNOK(t *testing.T) {
 }
 
 func TestRewriteLargePacketOffsets(t *testing.T) {
-	testOK := func(t *testing.T, load bpf.Instruction) {
+	testOK := func(t *testing.T, load bpf.Instruction, packetOff uint16) {
 		t.Helper()
 
 		insns := toInstructions([]bpf.Instruction{
@@ -817,12 +817,14 @@ func TestRewriteLargePacketOffsets(t *testing.T) {
 		})
 
 		blocks := mustSplitBlocks(t, 1, insns)
-		rewriteLargePacketOffsets(&blocks)
+		rewriteLargePacketOffsets(&blocks, compileOpts{
+			packetStartMaxOffset: packetOff,
+		})
 
 		matchBlock(t, blocks[0], insns, nil)
 	}
 
-	testOOB := func(t *testing.T, load bpf.Instruction) {
+	testOOB := func(t *testing.T, load bpf.Instruction, packetOff uint16) {
 		t.Helper()
 
 		insns := toInstructions([]bpf.Instruction{
@@ -831,22 +833,31 @@ func TestRewriteLargePacketOffsets(t *testing.T) {
 		})
 
 		blocks := mustSplitBlocks(t, 1, insns)
-		rewriteLargePacketOffsets(&blocks)
+		rewriteLargePacketOffsets(&blocks, compileOpts{
+			packetStartMaxOffset: packetOff,
+		})
 
 		matchBlock(t, blocks[0], []instruction{
 			{Instruction: bpf.RetConstant{}},
 		}, nil)
 	}
 
-	testOK(t, bpf.LoadAbsolute{Size: 1, Off: 65534})
-	testOOB(t, bpf.LoadAbsolute{Size: 1, Off: 65535})
-	testOK(t, bpf.LoadAbsolute{Size: 2, Off: 65533})
-	testOOB(t, bpf.LoadAbsolute{Size: 2, Off: 65534})
-	testOK(t, bpf.LoadAbsolute{Size: 4, Off: 65531})
-	testOOB(t, bpf.LoadAbsolute{Size: 4, Off: 65532})
+	testOK(t, bpf.LoadAbsolute{Size: 1, Off: 65534}, 0)
+	testOOB(t, bpf.LoadAbsolute{Size: 1, Off: 65535}, 0)
+	testOK(t, bpf.LoadAbsolute{Size: 2, Off: 65533}, 0)
+	testOOB(t, bpf.LoadAbsolute{Size: 2, Off: 65534}, 0)
+	testOK(t, bpf.LoadAbsolute{Size: 4, Off: 65531}, 0)
+	testOOB(t, bpf.LoadAbsolute{Size: 4, Off: 65532}, 0)
 
-	testOK(t, bpf.LoadMemShift{Off: 65534})
-	testOOB(t, bpf.LoadMemShift{Off: 65535})
+	testOK(t, bpf.LoadMemShift{Off: 65534}, 0)
+	testOOB(t, bpf.LoadMemShift{Off: 65535}, 0)
+
+	// With packet offsets.
+	testOK(t, bpf.LoadAbsolute{Size: 1, Off: 65530}, 4)
+	testOOB(t, bpf.LoadAbsolute{Size: 1, Off: 65531}, 4)
+
+	testOK(t, bpf.LoadMemShift{Off: 65530}, 4)
+	testOOB(t, bpf.LoadMemShift{Off: 65531}, 4)
 }
 
 // Test unreachable blocks due to large packet offsets are removed.
@@ -876,7 +887,7 @@ func TestRewriteLargePacketOffsetsDeadBlock(t *testing.T) {
 	insns := toInstructions(filter)
 
 	blocks := mustSplitBlocks(t, 6, insns)
-	rewriteLargePacketOffsets(&blocks)
+	rewriteLargePacketOffsets(&blocks, compileOpts{})
 	if len(blocks) != 5 {
 		t.Fatalf("expected 5 blocks, got %v", blocks)
 	}
@@ -1068,7 +1079,7 @@ func TestIndirectGuardSize(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 1, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 8, end: 14}}},
@@ -1085,7 +1096,7 @@ func TestNoIndirectGuard(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 1, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], insns, nil)
 }
@@ -1103,7 +1114,7 @@ func TestIndirectGuardClobber(t *testing.T) {
 
 			blocks := mustSplitBlocks(t, 1, insns)
 
-			addIndirectPacketGuards(blocks)
+			addIndirectPacketGuards(blocks, compileOpts{})
 
 			matchBlock(t, blocks[0], join(
 				[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 14}}},
@@ -1138,7 +1149,7 @@ func TestIndirectGuardClobberLast(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 3, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 14}}},
@@ -1173,7 +1184,7 @@ func TestIndirectGuardParentsOK(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 4, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 14}}},
@@ -1204,7 +1215,7 @@ func TestIndirectGuardParentNoMatch(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 4, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 16}}},
@@ -1239,7 +1250,7 @@ func TestIndirectGuardParentDeepNoMatch(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 5, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 18}}},
@@ -1269,7 +1280,7 @@ func TestIndirectGuardParentMatch(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 3, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 9, end: 13}}},
@@ -1307,7 +1318,7 @@ func TestIndirectGuardParentClobber(t *testing.T) {
 
 			blocks := mustSplitBlocks(t, 4, insns)
 
-			addIndirectPacketGuards(blocks)
+			addIndirectPacketGuards(blocks, compileOpts{})
 
 			matchBlock(t, blocks[0], join(
 				[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 14}}},
@@ -1353,7 +1364,7 @@ func TestIndirectGuardExtendClobber(t *testing.T) {
 
 			blocks := mustSplitBlocks(t, 5, insns)
 
-			addIndirectPacketGuards(blocks)
+			addIndirectPacketGuards(blocks, compileOpts{})
 
 			matchBlock(t, blocks[0], join(
 				[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 14}}},
@@ -1396,7 +1407,7 @@ func TestIndirectGuardParentsNotOK(t *testing.T) {
 
 	blocks := mustSplitBlocks(t, 4, insns)
 
-	addIndirectPacketGuards(blocks)
+	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
 		[]instruction{{Instruction: packetGuardIndirect{start: 9, end: 14}}},
