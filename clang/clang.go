@@ -9,11 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
-// CompileOpts configure how an XDP program is compiled / built
+// Opts configure how an XDP program is compiled / built
 type Opts struct {
 	// clang binary to use
 	Clang string
@@ -30,15 +31,23 @@ type Opts struct {
 	EmitDebug bool
 }
 
-// Compile compiles a C source string into an ELF
-func Compile(source []byte, name string, opts Opts) ([]byte, error) {
+// Res is the result of compiling a C source with clang.
+type Res struct {
+	ELF []byte
+
+	// CPUTime is the user + system CPU time used by this clang invocation.
+	CPUTime time.Duration
+}
+
+// Compile compiles a C source string into an ELF, and returns metadata in Res.
+func CompileRes(source []byte, name string, opts Opts) (Res, error) {
 	var err error
 
 	outdir := opts.Output
 	if outdir == "" {
 		outdir, err = ioutil.TempDir("", "cbpfc-clang")
 		if err != nil {
-			return nil, errors.Wrap(err, "can't create output directory")
+			return Res{}, errors.Wrap(err, "can't create output directory")
 		}
 		defer os.RemoveAll(outdir)
 	} else {
@@ -49,7 +58,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 	outputFile := fmt.Sprintf("%s.elf", name)
 	err = ioutil.WriteFile(filepath.Join(outdir, inputFile), source, 0644)
 	if err != nil {
-		return nil, errors.Wrap(err, "can't write out program")
+		return Res{}, errors.Wrap(err, "can't write out program")
 	}
 
 	flags := []string{
@@ -66,7 +75,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 		// debug build script will be in a different directory, relative imports won't work
 		absInclude, err := filepath.Abs(include)
 		if err != nil {
-			return nil, errors.Wrapf(err, "can't get absolute path to include %s", include)
+			return Res{}, errors.Wrapf(err, "can't get absolute path to include %s", include)
 		}
 
 		flags = append(flags, "-I", absInclude)
@@ -83,7 +92,7 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 		cmdline := cmd.Path + " " + strings.Join(flags, " ") + "\n"
 		err := ioutil.WriteFile(filepath.Join(outdir, "build"), []byte(cmdline), 0644)
 		if err != nil {
-			return nil, errors.Wrap(err, "can't write build cmdline")
+			return Res{}, errors.Wrap(err, "can't write build cmdline")
 		}
 	}
 
@@ -92,16 +101,25 @@ func Compile(source []byte, name string, opts Opts) ([]byte, error) {
 	if err != nil {
 		switch e := err.(type) {
 		case *exec.ExitError:
-			return nil, errors.Wrapf(e, "unable to compile C:\n%s", string(e.Stderr))
+			return Res{}, errors.Wrapf(e, "unable to compile C:\n%s", string(e.Stderr))
 		default:
-			return nil, errors.Wrapf(e, "unable to compile C")
+			return Res{}, errors.Wrapf(e, "unable to compile C")
 		}
 	}
 
 	elf, err := ioutil.ReadFile(filepath.Join(outdir, outputFile))
 	if err != nil {
-		return nil, errors.Wrap(err, "can't read ELF")
+		return Res{}, errors.Wrap(err, "can't read ELF")
 	}
 
-	return elf, nil
+	return Res{
+		ELF:     elf,
+		CPUTime: cmd.ProcessState.SystemTime() + cmd.ProcessState.UserTime(),
+	}, nil
+}
+
+// Compile compiles a C source string into an ELF.
+func Compile(source []byte, name string, opts Opts) ([]byte, error) {
+	res, err := CompileRes(source, name, opts)
+	return res.ELF, err
 }
