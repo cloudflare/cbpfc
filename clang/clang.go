@@ -3,8 +3,8 @@
 package clang
 
 import (
+	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +23,7 @@ type Opts struct {
 	Include []string
 
 	// Destination directory for compiled programs.
-	// Uses a temporary directory if empty.
+	// Uses stdout if empty.
 	Output string
 
 	// Emit DWARF debug info in the XDP elf.
@@ -39,65 +39,77 @@ type Res struct {
 	CPUTime time.Duration
 }
 
-// Compile compiles a C source string into an ELF, and returns metadata in Res.
-func CompileRes(source []byte, name string, opts Opts) (Res, error) {
-	var err error
-
-	outdir := opts.Output
-	if outdir == "" {
-		outdir, err = ioutil.TempDir("", "cbpfc-clang")
-		if err != nil {
-			return Res{}, errors.Wrap(err, "can't create output directory")
-		}
-		defer os.RemoveAll(outdir)
-	} else {
-		_ = os.Mkdir(outdir, 0755)
-	}
-
-	inputFile := fmt.Sprintf("%s.c", name)
-	outputFile := fmt.Sprintf("%s.elf", name)
-	err = ioutil.WriteFile(filepath.Join(outdir, inputFile), source, 0644)
-	if err != nil {
-		return Res{}, errors.Wrap(err, "can't write out program")
-	}
-
+func (o Opts) cmd(inputFile string, outputFile string) (*exec.Cmd, error) {
 	flags := []string{
 		"-O2",
 		"-Wall", "-Werror",
 		"-nostdinc",
 		"-c",
 		"-target", "bpf",
-		inputFile,
+		// read C source (to support stdin)
+		"-x", "c", inputFile,
+		// output
 		"-o", outputFile,
 	}
 
-	for _, include := range opts.Include {
+	for _, include := range o.Include {
 		// debug build script will be in a different directory, relative imports won't work
 		absInclude, err := filepath.Abs(include)
 		if err != nil {
-			return Res{}, errors.Wrapf(err, "can't get absolute path to include %s", include)
+			return nil, errors.Wrapf(err, "can't get absolute path to include %s", include)
 		}
 
 		flags = append(flags, "-I", absInclude)
 	}
 
-	if opts.EmitDebug {
+	if o.EmitDebug {
 		flags = append(flags, "-g")
 	}
 
-	cmd := exec.Command(opts.Clang, flags...)
+	return exec.Command(o.Clang, flags...), nil
+}
 
-	// debug build script
+// Compile compiles a C source string into an ELF, and returns metadata in Res.
+func CompileRes(source []byte, name string, opts Opts) (Res, error) {
+	// Use stdout if no output dir is set to avoid a temporary file.
+	input := "-"
+	output := "-"
+	outputFunc := func(stdout []byte) ([]byte, error) {
+		return stdout, nil
+	}
 	if opts.Output != "" {
-		cmdline := cmd.Path + " " + strings.Join(flags, " ") + "\n"
-		err := ioutil.WriteFile(filepath.Join(outdir, "build"), []byte(cmdline), 0644)
-		if err != nil {
-			return Res{}, errors.Wrap(err, "can't write build cmdline")
+		_ = os.Mkdir(opts.Output, 0755)
+		input = filepath.Join(opts.Output, fmt.Sprintf("%s.c", name))
+		if err := os.WriteFile(input, source, 0644); err != nil {
+			return Res{}, err
+		}
+		output = filepath.Join(opts.Output, fmt.Sprintf("%s.elf", name))
+		outputFunc = func(stdout []byte) ([]byte, error) {
+			return os.ReadFile(output)
 		}
 	}
 
-	cmd.Dir = outdir
-	_, err = cmd.Output()
+	cmd, err := opts.cmd(input, output)
+	if err != nil {
+		return Res{}, err
+	}
+
+	// debug build script
+	if opts.Output != "" {
+		cmdline := cmd.Path + " " + strings.Join(cmd.Args, " ") + "\n"
+		err := os.WriteFile(filepath.Join(opts.Output, "build"), []byte(cmdline), 0644)
+		if err != nil {
+			return Res{}, errors.Wrap(err, "can't write build cmdline")
+		}
+	} else {
+		cmd.Stdin = bytes.NewReader(source)
+	}
+
+	return compileRes(cmd, outputFunc)
+}
+
+func compileRes(cmd *exec.Cmd, output func(stdout []byte) ([]byte, error)) (Res, error) {
+	stdout, err := cmd.Output()
 	if err != nil {
 		switch e := err.(type) {
 		case *exec.ExitError:
@@ -106,10 +118,9 @@ func CompileRes(source []byte, name string, opts Opts) (Res, error) {
 			return Res{}, errors.Wrapf(e, "unable to compile C")
 		}
 	}
-
-	elf, err := ioutil.ReadFile(filepath.Join(outdir, outputFile))
+	elf, err := output(stdout)
 	if err != nil {
-		return Res{}, errors.Wrap(err, "can't read ELF")
+		return Res{}, err
 	}
 
 	return Res{
