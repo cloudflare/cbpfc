@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/pkg/errors"
 )
 
 // Opts configure how an XDP program is compiled / built
@@ -56,7 +54,7 @@ func (o Opts) cmd(inputFile string, outputFile string) (*exec.Cmd, error) {
 		// debug build script will be in a different directory, relative imports won't work
 		absInclude, err := filepath.Abs(include)
 		if err != nil {
-			return nil, errors.Wrapf(err, "can't get absolute path to include %s", include)
+			return nil, fmt.Errorf("can't get absolute path to include %s: %w", include, err)
 		}
 
 		flags = append(flags, "-I", absInclude)
@@ -99,7 +97,7 @@ func CompileRes(source []byte, name string, opts Opts) (Res, error) {
 		cmdline := cmd.Path + " " + strings.Join(cmd.Args, " ") + "\n"
 		err := os.WriteFile(filepath.Join(opts.Output, "build"), []byte(cmdline), 0644)
 		if err != nil {
-			return Res{}, errors.Wrap(err, "can't write build cmdline")
+			return Res{}, fmt.Errorf("can't write build cmdline: %w", err)
 		}
 	} else {
 		cmd.Stdin = bytes.NewReader(source)
@@ -113,9 +111,9 @@ func compileRes(cmd *exec.Cmd, output func(stdout []byte) ([]byte, error)) (Res,
 	if err != nil {
 		switch e := err.(type) {
 		case *exec.ExitError:
-			return Res{}, errors.Wrapf(e, "unable to compile C:\n%s", string(e.Stderr))
+			return Res{}, fmt.Errorf("unable to compile C:\n%s: %w", string(e.Stderr), e)
 		default:
-			return Res{}, errors.Wrapf(e, "unable to compile C")
+			return Res{}, fmt.Errorf("unable to compile C: %w", e)
 		}
 	}
 	elf, err := output(stdout)

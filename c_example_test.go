@@ -2,12 +2,12 @@ package cbpfc
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"text/template"
 
 	"github.com/cloudflare/cbpfc/clang"
 
-	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
 
@@ -97,7 +97,7 @@ func buildC(filter []bpf.Instruction, programName string, opts COpts) ([]byte, e
 	// convert filter to C
 	ebpfFilter, err := ToC(filter, opts)
 	if err != nil {
-		return nil, errors.Wrap(err, "converting filter to C")
+		return nil, fmt.Errorf("converting filter to C: %w", err)
 	}
 
 	// embed filter in C template
@@ -109,7 +109,7 @@ func buildC(filter []bpf.Instruction, programName string, opts COpts) ([]byte, e
 		Offset:      opts.PacketStartMaxOffset,
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "executing template with C filter")
+		return nil, fmt.Errorf("executing template with C filter: %w", err)
 	}
 
 	// lookup clang binary to use
@@ -124,7 +124,7 @@ func buildC(filter []bpf.Instruction, programName string, opts COpts) ([]byte, e
 		EmitDebug: true, // For BTF
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "compiling C")
+		return nil, fmt.Errorf("compiling C: %w", err)
 	}
 
 	return elf, nil

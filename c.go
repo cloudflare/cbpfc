@@ -6,7 +6,6 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/pkg/errors"
 	"golang.org/x/net/bpf"
 )
 
@@ -103,7 +102,7 @@ type COpts struct {
 // non 0 if the packet does match.
 func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 	if !funcNameRegex.MatchString(opts.FunctionName) {
-		return "", errors.Errorf("invalid FunctionName %q", opts.FunctionName)
+		return "", fmt.Errorf("invalid FunctionName %q", opts.FunctionName)
 	}
 
 	blocks, err := compile(filter, compileOpts{
@@ -130,13 +129,13 @@ func ToC(filter []bpf.Instruction, opts COpts) (string, error) {
 	// Fill in the template
 	tmpl, err := template.New("cbfp_func").Parse(funcTemplate)
 	if err != nil {
-		return "", errors.Wrapf(err, "unable to parse func template")
+		return "", fmt.Errorf("unable to parse func template: %w", err)
 	}
 
 	c := strings.Builder{}
 
 	if err := tmpl.Execute(&c, fun); err != nil {
-		return "", errors.Wrapf(err, "unable to execute func template")
+		return "", fmt.Errorf("unable to execute func template: %w", err)
 	}
 
 	return c.String(), nil
@@ -151,7 +150,7 @@ func blockToC(blk *block) (cBlock, error) {
 	for _, insn := range blk.insns {
 		stat, err := insnToC(insn, blk)
 		if err != nil {
-			return cBlk, errors.Wrapf(err, "unable to compile %v", insn)
+			return cBlk, fmt.Errorf("unable to compile %v: %w", insn, err)
 		}
 
 		cBlk.Statements = append(cBlk.Statements, stat...)
@@ -180,7 +179,7 @@ func insnToC(insn instruction, blk *block) ([]string, error) {
 
 	case bpf.LoadExtension:
 		if i.Num != bpf.ExtLen {
-			return nil, errors.Errorf("unsupported BPF extension %v", i)
+			return nil, fmt.Errorf("unsupported BPF extension %v", i)
 		}
 
 		return stat("a = data_end - data;")
@@ -227,7 +226,7 @@ func insnToC(insn instruction, blk *block) ([]string, error) {
 		return stat("if (x == 0) return 0;")
 
 	default:
-		return nil, errors.Errorf("unsupported instruction %v", insn)
+		return nil, fmt.Errorf("unsupported instruction %v", insn)
 	}
 }
 
@@ -243,7 +242,7 @@ func packetLoadToC(size int, offsetFmt string, offsetArgs ...interface{}) ([]str
 		return stat("a = ntohl(*((uint32_t *) (%s)));", offset)
 	}
 
-	return nil, errors.Errorf("unsupported load size %d", size)
+	return nil, fmt.Errorf("unsupported load size %d", size)
 }
 
 func condToC(skipTrue, skipFalse skip, blk *block, condFmt string, condArgs ...interface{}) ([]string, error) {
