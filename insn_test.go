@@ -347,6 +347,49 @@ func TestLoadIndirectGuardOverflow(t *testing.T) {
 	}, nil, noMatch)
 }
 
+// A block with an indirect load that is reachable from two parents with
+// indirect guards that have different starts.
+func TestLoadIndirectGuardStartMismatch(t *testing.T) {
+	t.Parallel()
+
+	filter := []bpf.Instruction{
+		// block 0: variable RegX (0 for the test packets), branch on packet[0].
+		/* 0 */ bpf.LoadAbsolute{Off: 0, Size: 4},
+		/* 1 */ bpf.TAX{}, // RegX = packet[0:4] = 0
+		/* 2 */ bpf.LoadAbsolute{Off: 4, Size: 1},
+		/* 3 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 1, SkipTrue: 0, SkipFalse: 2}, // block 1 or block 2
+
+		// block 1: indirect guard start 8.
+		/* 4 */ bpf.LoadIndirect{Off: 8, Size: 4}, // guard [8:12]
+		/* 5 */ bpf.Jump{Skip: 1}, // jump to block 3
+
+		// block 2: indirect guard start 13.
+		/* 6 */ bpf.LoadIndirect{Off: 13, Size: 2}, // guard [13:15]
+		// fall through to block 3
+
+		// block 3: indirect load at Off 9 - reached from both parents.
+		/* 7 */ bpf.LoadIndirect{Off: 9, Size: 1},
+		/* 8 */ bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x42, SkipTrue: 1},
+		/* 9 */ bpf.RetConstant{Val: 0},
+		/* 10 */ bpf.RetConstant{Val: 1},
+	}
+
+	// packet[0:4] = 0 -> RegX == 0, so LoadIndirect offsets are absolute packet offsets.
+	// packet[9] = 0x42 is the byte block 3 must read to match.
+	// The other guarded bytes are 0 so a wrong read yields the wrong (noMatch) result.
+	packet := func(selector byte) []byte {
+		in := make([]byte, 16)
+		in[4] = selector // selects block 1 (==1) or block 2 (!=1)
+		in[9] = 0x42
+		return in
+	}
+
+	// Path through block 1 (guard start 8).
+	checkBackends(t, filter, packet(1), match)
+	// Path through block 2 (guard start 13).
+	checkBackends(t, filter, packet(0), match)
+}
+
 // Indirect load with an offset packet pointer.
 func TestLoadIndirectPacketStartMaxOffset(t *testing.T) {
 	t.Parallel()

@@ -242,11 +242,13 @@ func (a packetGuardIndirect) restrict(o packetGuard) packetGuard {
 		return packetGuardIndirect{}
 	}
 
-	n := a
-
-	if b.start > a.start {
-		n.start = b.start
+	// If the start is different, we need a new guard: we can't know which of the two
+	// offsets have been stored for the RegX + start check.
+	if a.start != b.start {
+		return packetGuardIndirect{}
 	}
+
+	n := a
 	if b.end < a.end {
 		n.end = b.end
 	}

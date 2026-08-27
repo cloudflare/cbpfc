@@ -1410,7 +1410,7 @@ func TestIndirectGuardParentsNotOK(t *testing.T) {
 	addIndirectPacketGuards(blocks, compileOpts{})
 
 	matchBlock(t, blocks[0], join(
-		[]instruction{{Instruction: packetGuardIndirect{start: 9, end: 14}}},
+		[]instruction{{Instruction: packetGuardIndirect{start: 10, end: 14}}},
 		insns[:2],
 	), nil)
 	matchBlock(t, blocks[1], join(
@@ -1421,7 +1421,12 @@ func TestIndirectGuardParentsNotOK(t *testing.T) {
 		[]instruction{{Instruction: packetGuardIndirect{start: 9, end: 15}}},
 		insns[4:5],
 	), nil)
-	matchBlock(t, blocks[3], insns[5:], nil)
+	// block 3 is reached from block 1 (start 8) and block 2 (start 9). The two
+	// anchors disagree, so it can't reuse either parent's guard and emits its own.
+	matchBlock(t, blocks[3], join(
+		[]instruction{{Instruction: packetGuardIndirect{start: 9, end: 10}}},
+		insns[5:],
+	), nil)
 }
 
 func join(insns ...[]instruction) []instruction {
