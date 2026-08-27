@@ -1,6 +1,9 @@
 # Anytime we push to any branch
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test clang-${{ matrix.clang }}
