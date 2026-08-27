@@ -545,6 +545,36 @@ func TestDivisionByZeroImm(t *testing.T) {
 	test(t, bpf.ALUOpMod)
 }
 
+// Shifts greater than 31
+func TestShiftConstantTooLarge(t *testing.T) {
+	test := func(t *testing.T, op bpf.ALUOp) {
+		t.Helper()
+
+		// Valid: shifts less than 32 are accepted.
+		for _, val := range []uint32{0, 1, 31} {
+			_, err := compile([]bpf.Instruction{
+				bpf.ALUOpConstant{Op: op, Val: val},
+				bpf.RetA{},
+			}, compileOpts{})
+			if err != nil {
+				t.Fatalf("shift by %d rejected: %v", val, err)
+			}
+		}
+
+		// Invalid: shifts of 32 or more are rejected.
+		for _, val := range []uint32{32, 33, 64, 0xFFFFFFFF} {
+			_, err := compile([]bpf.Instruction{
+				bpf.ALUOpConstant{Op: op, Val: val},
+				bpf.RetA{},
+			}, compileOpts{})
+			requireError(t, err, "must be less than 32")
+		}
+	}
+
+	test(t, bpf.ALUOpShiftLeft)
+	test(t, bpf.ALUOpShiftRight)
+}
+
 // Division by RegX
 func TestDivisionByZeroX(t *testing.T) {
 	test := func(t *testing.T, op bpf.ALUOp) {

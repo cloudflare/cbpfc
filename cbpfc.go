@@ -389,6 +389,16 @@ func validateInstructions(insns []bpf.Instruction) error {
 			default:
 				return errors.Errorf("unsupported BPF extension %d: %v", pc, insn)
 			}
+
+		// The kernel rejects shifts by a constant >= 32 :
+		// https://elixir.bootlin.com/linux/v6.10/source/net/core/filter.c#L516
+		case bpf.ALUOpConstant:
+			switch i.Op {
+			case bpf.ALUOpShiftLeft, bpf.ALUOpShiftRight:
+				if i.Val >= 32 {
+					return errors.Errorf("instruction %d shifts by %d, must be less than 32: %v", pc, i.Val, insn)
+				}
+			}
 		}
 	}
 

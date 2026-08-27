@@ -602,6 +602,7 @@ func TestALUShiftLeft(t *testing.T) {
 
 	checkAlu(t, bpf.ALUOpShiftLeft, 1, 0, 1)
 	checkAlu(t, bpf.ALUOpShiftLeft, 1, 4, 0x10)
+	checkAlu(t, bpf.ALUOpShiftLeft, 1, 31, 0x80000000)
 }
 
 func TestALUShiftRight(t *testing.T) {
@@ -609,6 +610,7 @@ func TestALUShiftRight(t *testing.T) {
 
 	checkAlu(t, bpf.ALUOpShiftRight, 0xF0, 4, 0x0F)
 	checkAlu(t, bpf.ALUOpShiftRight, 0xF0, 8, 0)
+	checkAlu(t, bpf.ALUOpShiftRight, 0x80000000, 31, 1)
 }
 
 func TestALUMod(t *testing.T) {
