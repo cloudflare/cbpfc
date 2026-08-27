@@ -215,11 +215,11 @@ func insnToC(insn instruction, blk *block) ([]string, error) {
 		return []string{
 			// Sign extend RegX to 64bits.
 			fmt.Sprintf("indirect = (uint8_t *) (((int64_t) (int32_t) x) + %d);", i.start),
+			// Prevent clang from sharing indirect between bounds checks:
+			// the verifier needs to see the full dance every time.
+			fmt.Sprintf(`asm volatile("" : "+r" (indirect));`),
 			fmt.Sprintf("if ((uint64_t)indirect >= %d) return false;", i.maxStartOffset()),
 			fmt.Sprintf("indirect = data + (uint64_t)indirect;"),
-			// Prevent clang from calculating indirect + delta() directly from the packet start when RegX is constant:
-			// only indirect has the correct bounds check.
-			fmt.Sprintf(`asm volatile("" : : "r" (indirect));`),
 			fmt.Sprintf("if (indirect + %d > data_end) return false;", i.length()),
 		}, nil
 
