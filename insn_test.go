@@ -2,36 +2,13 @@ package cbpfc
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"math"
-	"os"
 	"testing"
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/net/bpf"
-
-	// syscall has a wonky RLIM_INFINITY, and no RLIMIT_MEMLOCK
-	"golang.org/x/sys/unix"
 )
-
-func TestMain(m *testing.M) {
-	// Needed for testing.Short
-	flag.Parse()
-
-	if !testing.Short() {
-		// Remove any locked memory limits so we can load BPF programs
-		err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
-			Cur: unix.RLIM_INFINITY,
-			Max: unix.RLIM_INFINITY,
-		})
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	os.Exit(m.Run())
-}
 
 func TestZeroInitA(t *testing.T) {
 	t.Parallel()

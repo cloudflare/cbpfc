@@ -3,12 +3,12 @@ package cbpfc
 import (
 	"bytes"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
 
 	"golang.org/x/net/bpf"
-	"golang.org/x/sys/unix"
 )
 
 // kernelBackend is a backend that runs cBPF in the kernel
@@ -38,12 +38,21 @@ func kernelBackend(tb testing.TB, insns []bpf.Instruction, in []byte, opts backe
 		tb.Fatal(err)
 	}
 	err = readConn.Control(func(fd uintptr) {
-		err := unix.SetsockoptSockFprog(int(fd), unix.SOL_SOCKET, unix.SO_ATTACH_FILTER, &unix.SockFprog{
+		sockFProg := syscall.SockFprog{
 			Len:    uint16(len(filter)),
-			Filter: (*unix.SockFilter)(unsafe.Pointer(&filter[0])),
-		})
-		if err != nil {
-			tb.Fatal(err)
+			Filter: (*syscall.SockFilter)(unsafe.Pointer(&filter[0])),
+		}
+
+		if _, _, errno := syscall.Syscall6(
+			syscall.SYS_SETSOCKOPT,
+			uintptr(fd),
+			uintptr(syscall.SOL_SOCKET),
+			uintptr(syscall.SO_ATTACH_FILTER),
+			uintptr(unsafe.Pointer(&sockFProg)),
+			uintptr(unsafe.Sizeof(sockFProg)),
+			0,
+		); errno != 0 {
+			tb.Fatal(errno)
 		}
 	})
 	if err != nil {
