@@ -526,10 +526,15 @@ func checkAlu(t *testing.T, op bpf.ALUOp, a, b, res uint32) {
 	}
 
 	checkBackends(t, constFilter, []byte{}, match)
+	checkAluX(t, op, a, b, res)
+}
+
+func checkAluX(t *testing.T, op bpf.ALUOp, a, x, res uint32) {
+	t.Helper()
 
 	xFilter := []bpf.Instruction{
 		bpf.LoadConstant{Dst: bpf.RegA, Val: a},
-		bpf.LoadConstant{Dst: bpf.RegX, Val: b},
+		bpf.LoadConstant{Dst: bpf.RegX, Val: x},
 
 		bpf.ALUOpX{Op: op},
 
@@ -623,6 +628,7 @@ func TestALUShiftLeft(t *testing.T) {
 	checkAlu(t, bpf.ALUOpShiftLeft, 1, 0, 1)
 	checkAlu(t, bpf.ALUOpShiftLeft, 1, 4, 0x10)
 	checkAlu(t, bpf.ALUOpShiftLeft, 1, 31, 0x80000000)
+	checkAluX(t, bpf.ALUOpShiftLeft, 1, 32, 1)
 }
 
 func TestALUShiftRight(t *testing.T) {
@@ -631,6 +637,7 @@ func TestALUShiftRight(t *testing.T) {
 	checkAlu(t, bpf.ALUOpShiftRight, 0xF0, 4, 0x0F)
 	checkAlu(t, bpf.ALUOpShiftRight, 0xF0, 8, 0)
 	checkAlu(t, bpf.ALUOpShiftRight, 0x80000000, 31, 1)
+	checkAluX(t, bpf.ALUOpShiftRight, 0x80000000, 32, 0x80000000)
 }
 
 func TestALUMod(t *testing.T) {
