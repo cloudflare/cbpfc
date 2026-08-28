@@ -398,7 +398,7 @@ func validateInstructions(insns []bpf.Instruction) error {
 			switch i.Op {
 			case bpf.ALUOpShiftLeft, bpf.ALUOpShiftRight:
 				if i.Val >= 32 {
-					return errors.Errorf("instruction %d shifts by %d, must be less than 32: %v", pc, i.Val, insn)
+					return fmt.Errorf("instruction %d shifts by %d, must be less than 32: %v", pc, i.Val, insn)
 				}
 			}
 		}
